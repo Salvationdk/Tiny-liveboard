@@ -10,12 +10,12 @@ API = "https://opendataapi.dmi.dk/v1/radardata"
 FILE = re.compile(r"dk\.com\.\d{12}\.500_max\.h5")
 
 def decode_tile(raw, z, x, y):
+    if len(raw)>32*1024*1024 or not 3<=z<=9 or not (0<=x<2**z and 0<=y<2**z):
+        raise ValueError("Invalid radar request")
     import h5py
     import numpy as np
     from pyproj import CRS, Transformer
     from PIL import Image
-    if len(raw)>32*1024*1024 or not 3<=z<=9 or not (0<=x<2**z and 0<=y<2**z):
-        raise ValueError("Invalid radar request")
     def string(value):
         return value.decode() if isinstance(value, bytes) else str(value)
     with h5py.File(io.BytesIO(raw),"r") as f:
@@ -26,19 +26,20 @@ def decode_tile(raw, z, x, y):
         right,top=transform.transform(float(where["UR_lon"]),float(where["UR_lat"]))
         field=None
         for name in f:
-            if not name.startswith("dataset"): continue
+            if not re.fullmatch(r"dataset\d+",name) or not isinstance(f.get(name,getlink=True),h5py.HardLink): continue
             for key in f[name]:
-                if not re.fullmatch(r"data\d+",key): continue
+                if not re.fullmatch(r"data\d+",key) or not isinstance(f[name].get(key,getlink=True),h5py.HardLink): continue
                 group=f[name][key]
                 attrs=group["what"].attrs
                 if string(attrs.get("quantity","")) in ("DBZH","TH","DBZ"):
+                    if not isinstance(group.get("data",getlink=True),h5py.HardLink): continue
                     field=group["data"]; meta=attrs; break
             if field is not None: break
-        if field is None or field.ndim!=2 or field.size>16000000:
+        if not isinstance(field,h5py.Dataset) or field.ndim!=2 or not 0<field.size<=16000000 or field.dtype.kind not in "iuf" or field.dtype.itemsize>8 or field.is_virtual or field.external:
             raise ValueError("Unsupported radar field")
         h,w=field.shape
         sx,sy=float(where["xscale"]),float(where["yscale"])
-        if not all(math.isfinite(v) for v in (left,top,sx,sy)) or min(sx,sy)<=0:
+        if not all(math.isfinite(v) for v in (left,bottom,right,top,sx,sy)) or min(sx,sy)<=0:
             raise ValueError("Invalid radar projection")
         if abs((right-left)/sx-w)>3 or abs((top-bottom)/sy-h)>3:
             raise ValueError("Inconsistent radar extent")
@@ -46,12 +47,16 @@ def decode_tile(raw, z, x, y):
         lon=(x+a/256)/2**z*360-180
         lat=np.degrees(np.arctan(np.sinh(np.pi*(1-2*(y+a/256)/2**z))))
         xx,yy=transform.transform(*np.meshgrid(lon,lat))
-        ix=np.floor((xx-left)/sx).astype("int64")
-        iy=np.floor((top-yy)/sy).astype("int64")
-        valid=(ix>=0)&(ix<w)&(iy>=0)&(iy<h)
+        finite=np.isfinite(xx)&np.isfinite(yy)
+        ix=np.floor(np.where(finite,np.clip((xx-left)/sx,-1,w),-1)).astype("int64")
+        iy=np.floor(np.where(finite,np.clip((top-yy)/sy,-1,h),-1)).astype("int64")
+        valid=finite&(ix>=0)&(ix<w)&(iy>=0)&(iy<h)
         values=field[:][np.clip(iy,0,h-1),np.clip(ix,0,w-1)]
         valid &= (values!=meta["nodata"]) & (values!=meta["undetect"])
-        dbz=values.astype(float)*float(meta["gain"])+float(meta["offset"])
+        gain,offset=float(meta["gain"]),float(meta["offset"])
+        if not math.isfinite(gain) or not math.isfinite(offset) or gain<=0: raise ValueError("Invalid radar calibration")
+        dbz=values.astype(float)*gain+offset
+        valid &= np.isfinite(dbz)
         rgba=np.zeros((256,256,4),dtype=np.uint8)
         for threshold,color in [(5,(65,155,235,130)),(15,(40,205,190,170)),(25,(60,210,70,190)),(35,(245,220,40,210)),(45,(245,100,35,225)),(55,(220,35,110,240))]:
             rgba[valid & (dbz>=threshold)]=color
