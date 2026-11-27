@@ -27,3 +27,15 @@ Forecast refresh tracks hourly and daily successes independently. Failed request
 
 ### Weather warnings
 Optional Danish MeteoAlarm Atom feed: https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-denmark (EUMETNET / national meteorological service). Updates are cached for five minutes. Polygon geometry is filtered against Home Assistant coordinates when supplied; area-name-only warnings remain geographically unverified. Always consult https://www.dmi.dk/varsler for official guidance. See https://meteoalarm.org/en/live/page/terms-and-conditions for reuse terms. The feed is not a safety-critical notification service.
+
+
+## Lovelace dashboard card
+
+With the integration installed and loaded, add a dashboard resource of type JavaScript module: `/tiny_liveboard/display.js`. Then add a manual card:
+
+```yaml
+type: custom:tiny-liveboard-card
+height: 480
+```
+
+Height is in pixels (240–2400). The card shares the integration's saved Studio configuration with the sidebar panel. Admin users can edit that shared configuration. Each mounted card opens its own camera streams; avoid unnecessary duplicate cards. Browser reload may be needed after adding the resource.
