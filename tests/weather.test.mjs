@@ -59,3 +59,12 @@ assert.equal(calls,3);
 assert.deepEqual(await cache.get("other",1000,fail),{data:undefined,stale:true});
 for(let i=0;i<30;i++)await cache.get("key"+i,1000,loader);
 assert.ok(cache.entries.size<=24);
+
+const units={temperature_unit:"°C",wind_speed_unit:"km/h"};
+const activityRows=Array.from({length:3},(_,i)=>({datetime:new Date(Date.UTC(2026,0,1,10+i)).toISOString(),temperature:15,wind_speed:10,humidity:60,precipitation:0,precipitation_probability:10}));
+const recommendation=(rows,label)=>advice(rows,units).find(x=>x[0]===label)[1];
+assert.match(recommendation(activityRows,"Vasketøj"),/3 timer/);
+assert.equal(recommendation(activityRows.slice(0,2),"Vasketøj"),"Usikkert tørrevejr");
+assert.equal(recommendation([activityRows[0],activityRows[2]],"Gåtur"),"Intet sikkert vindue fundet");
+assert.equal(recommendation(activityRows.map(r=>({...r,condition:"lightning"})),"Gåtur"),"Intet sikkert vindue fundet");
+assert.match(recommendation(activityRows.map(r=>({...r,precipitation_probability:80})),"Nedbør"),/Nedbørsrisiko/);
