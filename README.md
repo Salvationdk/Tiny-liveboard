@@ -39,3 +39,50 @@ height: 480
 ```
 
 Height is in pixels (240–2400). The card shares the integration's saved Studio configuration with the sidebar panel. Admin users can edit that shared configuration. Each mounted card opens its own camera streams; avoid unnecessary duplicate cards. Browser reload may be needed after adding the resource.
+
+
+## Central screen management
+
+Open the Tiny LiveBoard sidebar panel as an administrator to configure Studio.
+Create named profiles, then assign screen IDs in the screen assignment field,
+for example `{"kitchen":"Day","livingroom":"Evening"}`.
+Open `/tiny-liveboard?screen=kitchen` on the corresponding display.
+Use the visual schedule editor to select a profile, weekdays and start/end
+times. Overnight intervals are supported; the first matching rule wins.
+The default assigned profile is restored outside scheduled intervals.
+Explicit `?profile=NAME` overrides screen schedules.
+
+Kiosk mode hides LiveBoard's own toolbar, not the Home Assistant shell or
+operating-system controls. Use the unprofiled sidebar panel for administration.
+Screen presence is reported every 30 seconds; a 90-second timeout marks a
+screen offline. This measures browser connectivity, not hardware power.
+Presence records are reset on integration restart.
+
+## Weather data sources
+
+External weather maps are opt-in. The regional wind map prefers recent DMI
+station observations with matching station IDs and observation times.
+Missing points use Open-Meteo model data when available. These are different
+data types, not interchangeable measurements. Wind arrows indicate movement.
+Radar attempts DMI ODIM decoding and falls back to RainViewer when unavailable.
+MeteoAlarm Atom and WIS2 provide warning information. A missing feed or missing
+geometry must not be interpreted as an official all-clear.
+External map services receive regional location information.
+
+## Local development and verification
+
+Install Python and Node.js, then install the Python dependencies required by
+the integration manifest and its tests (including numpy, Pillow and defusedxml).
+From the repository root run:
+
+```sh
+python scripts/test-local.py
+```
+
+This runner performs local syntax checks and regression tests without dispatching
+GitHub Actions. Synthetic radar and CAP fixtures do not verify live service
+availability or compatibility with actual DMI files. Before a production release,
+verify installation on the target Home Assistant version, real camera streams,
+DMI radar and wind data, WIS2 connectivity, news feeds, profile transitions,
+Studio persistence and the physical display layout. No external MQTT broker or
+additional hardware is required for the intended architecture.
