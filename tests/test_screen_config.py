@@ -5,9 +5,9 @@ from copy import deepcopy
 
 source=pathlib.Path(__file__).resolve().parents[1]/"custom_components/tiny_liveboard/__init__.py"
 tree=ast.parse(source.read_text(encoding="utf-8"))
-fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=="validate_screen_config")
+functions=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ("validate_screen_config","validate_layout")]
 ns={}
-exec(compile(ast.Module(body=[fn],type_ignores=[]),str(source),"exec"),ns)
+exec(compile(ast.Module(body=functions,type_ignores=[]),str(source),"exec"),ns)
 validate=ns["validate_screen_config"]
 
 class ScreenConfigTests(unittest.TestCase):
@@ -28,4 +28,19 @@ class ScreenConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError): validate(self.config)
     def test_oversized(self):
         self.config["extra"]="x"*524288
+        with self.assertRaises(ValueError): validate(self.config)
+
+    def test_widget_geometry(self):
+        self.config["widgets"]=[{"entity":"sensor.temperature","x":5,"y":5,"w":25,"h":20,"z":1}]
+        self.assertEqual(validate(self.config),self.config)
+        self.config["widgets"][0]["w"]=100
+        with self.assertRaises(ValueError): validate(self.config)
+    def test_invalid_profile_layout(self):
+        self.config["profiles"]["Night"]["layout"]={"c0":{"x":0,"y":0,"w":50,"h":50}}
+        with self.assertRaises(ValueError): validate(self.config)
+    def test_lovelace_requires_card(self):
+        self.config["widgets"]=[{"kind":"lovelace","x":0,"y":0,"w":50,"h":50,"z":1}]
+        with self.assertRaises(ValueError): validate(self.config)
+    def test_invalid_layer(self):
+        self.config["layers"]={"weather":10}
         with self.assertRaises(ValueError): validate(self.config)
