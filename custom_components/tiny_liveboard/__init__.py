@@ -13,6 +13,7 @@ from .news import NewsEngine, settings
 from .alerts import AlertEngine
 from .radar import RadarEngine
 from .media import MediaEngine
+from .motion import MotionEngine
 
 DOMAIN = "tiny_liveboard"
 
@@ -87,11 +88,15 @@ def warnings_enabled(config):
 async def async_setup_entry(hass, entry):
     store = Store(hass, 1, DOMAIN)
     hass.data[DOMAIN] = {"media": MediaEngine(hass), "news": NewsEngine(hass), "alerts": AlertEngine(hass), "radar": RadarEngine(hass), "store": store, "save_lock": asyncio.Lock(), "screens_live": {}, "config": {**entry.data, **(await store.async_load() or {})}}
+    data = hass.data[DOMAIN]
+    data["motion"] = MotionEngine(hass, data["media"])
+    await data["motion"].configure(data["config"])
     if not hass.data.get(DOMAIN + "_registered"):
         await hass.http.async_register_static_paths([StaticPathConfig("/tiny_liveboard", str(Path(__file__).parent / "frontend"), False)])
         websocket_api.async_register_command(hass, get_config)
         websocket_api.async_register_command(hass, camera_media)
         websocket_api.async_register_command(hass, media_gallery)
+        websocket_api.async_register_command(hass, motion_history)
         websocket_api.async_register_command(hass, save_config)
         websocket_api.async_register_command(hass, get_news)
         websocket_api.async_register_command(hass, get_dmi)
@@ -112,6 +117,7 @@ async def async_setup_entry(hass, entry):
     return True
 
 async def async_unload_entry(hass, entry):
+    await hass.data[DOMAIN]["motion"].close()
     await hass.data[DOMAIN]["media"].close()
     await hass.data[DOMAIN]["alerts"].wis2.stop()
     frontend.async_remove_panel(hass, "tiny-liveboard")
@@ -140,6 +146,7 @@ async def save_config(hass, connection, msg):
             return
         await data["store"].async_save(config)
         data["config"] = config
+        await data["motion"].configure(config)
         data["news"].updated.clear()
         if warnings_enabled(config):
             data["alerts"].wis2.start()
@@ -252,3 +259,9 @@ async def media_gallery(hass, connection, msg):
         connection.send_result(msg["id"], result)
     except Exception:
         connection.send_error(msg["id"], "media_failed", "Media operation failed")
+
+@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/motion_history"})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def motion_history(hass, connection, msg):
+    connection.send_result(msg["id"], list(reversed(hass.data[DOMAIN]["motion"].history)))
