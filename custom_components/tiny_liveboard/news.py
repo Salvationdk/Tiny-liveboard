@@ -41,6 +41,10 @@ def parse_feed(payload):
     root = ElementTree.fromstring(payload)
     for node in root.iter():
         node.tag = node.tag.rsplit("}", 1)[-1]
+    if root.tag not in ("rss", "feed", "RDF"):
+        raise ValueError("Unrecognized news feed")
+    if root.tag == "rss" and root.find("channel") is None:
+        raise ValueError("Missing RSS channel")
     items = []
     for item in root.findall(".//item") + root.findall(".//entry"):
         title = " ".join((item.findtext("title") or "").split())
