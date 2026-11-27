@@ -4,6 +4,7 @@ import time
 import logging
 import re
 import unicodedata
+from urllib.parse import urljoin, urlsplit
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from defusedxml import ElementTree
@@ -102,18 +103,29 @@ class NewsEngine:
         try:
             session = async_get_clientsession(self.hass)
             async with asyncio.timeout(15):
-                async with session.get(url, allow_redirects=False) as response:
-                    if response.status != 200:
-                        raise ValueError(f"HTTP {response.status}")
-                    chunks = bytearray()
-                    async for chunk in response.content.iter_chunked(16384):
-                        chunks.extend(chunk)
-                        if len(chunks) > MAX_BYTES:
-                            raise ValueError("Feed too large")
+                for redirect in range(4):
+                    async with session.get(url, allow_redirects=False) as response:
+                        if response.status in (301,302,303,307,308):
+                            target = urljoin(url, response.headers.get("Location", ""))
+                            old, new = urlsplit(url), urlsplit(target)
+                            if new.scheme != "https" or new.hostname != old.hostname or new.username or new.password or new.port not in (None,443):
+                                raise ValueError("Unsafe feed redirect")
+                            url = target
+                            continue
+                        if response.status != 200:
+                            raise ValueError(f"HTTP {response.status}")
+                        chunks = bytearray()
+                        async for chunk in response.content.iter_chunked(16384):
+                            chunks.extend(chunk)
+                            if len(chunks) > MAX_BYTES:
+                                raise ValueError("Feed too large")
+                        break
+                else:
+                    raise ValueError("Too many feed redirects")
             parsed = await self.hass.async_add_executor_job(parse_feed, bytes(chunks))
             previous = {item["title"]: item["received"] for item in self.items.get(name, [])}
             self.items[name] = [dict(item, source=name, received=previous.get(item["title"], time.time())) for item in parsed]
             self.status[name] = {"ok": True, "count": len(parsed), "checked": time.time(), "last_success": time.time()}
         except Exception as exc:
-            self.status[name] = {"ok": False, "checked": time.time(), "error": type(exc).__name__, "last_success": self.status.get(name, {}).get("last_success"), "cached_count": len(self.items.get(name, []))}
+            self.status[name] = {"ok": False, "checked": time.time(), "error": str(exc)[:160] or type(exc).__name__, "last_success": self.status.get(name, {}).get("last_success"), "cached_count": len(self.items.get(name, []))}
             _LOGGER.debug("News source %s unavailable: %s", name, type(exc).__name__)
