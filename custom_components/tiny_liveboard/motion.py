@@ -34,6 +34,12 @@ class MotionEngine:
             entity = cfg.get("camera"+str(i), "")
             if cfg.get("motion"+str(i)) == "yes" and re.fullmatch(r"camera\.[a-z0-9_]+", entity or "") and entity not in seen:
                 seen.add(entity)
+                try:
+                    seconds = max(0,min(30,int(cfg.get('motionPre'+str(i),0))))
+                    if seconds and cfg.get('motionRecord'+str(i)) == 'yes':
+                        self.tasks.append(asyncio.create_task(self.keep_buffer(entity,seconds)))
+                except (ValueError,TypeError):
+                    pass
                 external = cfg.get("motionSensor"+str(i), "")
                 if cfg.get("motionMethod"+str(i)) == "external" and re.fullmatch(r"binary_sensor\.[a-z0-9_]+", external or ""):
                     self.tasks.append(asyncio.create_task(self.run_external(entity, external, cfg, str(i))))
@@ -45,6 +51,24 @@ class MotionEngine:
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
         self.tasks.clear()
+        for entity in list(self.media.buffers):
+            await self.media.stop_buffer(entity)
+
+    async def keep_buffer(self, entity, seconds):
+        try:
+            while True:
+                try:
+                    await asyncio.wait_for(self.media.start_buffer(entity,seconds),30)
+                    job=self.media.buffers.get(entity)
+                    if job:
+                        await job[0].wait()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _LOGGER.warning("Pre-recording buffer unavailable for %s",entity)
+                await asyncio.sleep(10)
+        finally:
+            await self.media.stop_buffer(entity)
 
     async def run(self, entity, cfg, i):
         from .media import async_get_stream_source
