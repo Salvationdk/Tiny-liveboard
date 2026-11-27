@@ -83,6 +83,9 @@ class RadarEngine:
                     if len(buf)>limit: raise ValueError("Radar response too large")
                 return bytes(buf)
     async def list(self):
+        from importlib.util import find_spec
+        if not all(find_spec(name) is not None for name in ("h5py", "numpy", "pyproj", "PIL")):
+            raise ValueError("Optional DMI radar decoder unavailable")
         import json
         from .news import timestamp
         async with self.lock:
