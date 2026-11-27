@@ -23,3 +23,9 @@ def test_atom_polygon():
 
 def test_empty_feed():
     assert load().parse_alerts(b'<feed xmlns="http://www.w3.org/2005/Atom"/>') == []
+
+
+def test_unknown_format_is_not_empty_success():
+    import pytest
+    with pytest.raises(ValueError):
+        load().parse_alerts(b'<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Unknown</title></entry></feed>')
