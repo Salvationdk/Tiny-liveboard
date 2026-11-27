@@ -6,6 +6,8 @@ import re
 from collections import deque
 from homeassistant.helpers.storage import Store
 import json
+import logging
+_LOGGER = logging.getLogger(__name__)
 
 def motion_level(previous, current, mask=None):
     if not previous or len(previous) != len(current):
@@ -41,7 +43,7 @@ class MotionEngine:
         self.tasks.clear()
 
     async def run(self, entity, cfg, i):
-        from homeassistant.components.camera import async_get_stream_source
+        from .media import async_get_stream_source
         sensor = "binary_sensor.tiny_liveboard_camera_"+str(int(i)+1)+"_motion"
         level_sensor = "sensor.tiny_liveboard_camera_"+str(int(i)+1)+"_motion_level"
         def number(key, default, low, high):
@@ -103,11 +105,15 @@ class MotionEngine:
                 except asyncio.CancelledError:
                     raise
                 except Exception:
+                    _LOGGER.warning('Motion analysis unavailable for %s; retrying', entity)
                     self.hass.states.async_set(sensor,"unavailable",{"device_class":"motion"})
                     self.hass.states.async_set(level_sensor,"unavailable")
                 finally:
                     if proc and proc.returncode is None:
-                        proc.kill()
+                        try:
+                            proc.kill()
+                        except ProcessLookupError:
+                            pass
                         await proc.wait()
                     await self.stop_owned(entity)
                 await asyncio.sleep(10)
