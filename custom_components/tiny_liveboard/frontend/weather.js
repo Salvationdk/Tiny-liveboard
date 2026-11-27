@@ -17,9 +17,9 @@ export function solar(date,lat,lon){if(!Number.isFinite(lat)||!Number.isFinite(l
 export function tilePosition(lat,lon,z){const n=2**z;return {x:(lon+180)/360*n,y:(1-Math.asinh(Math.tan(Math.max(-85.0511,Math.min(85.0511,lat))*Math.PI/180))/Math.PI)/2*n}}
 export function moon(date=new Date()){const cycle=29.530588853,age=((date.getTime()-Date.UTC(2000,0,6,18,14))/86400000%cycle+cycle)%cycle;return {age,illumination:Math.round(50*(1-Math.cos(age/cycle*2*Math.PI))),phase:["Nymåne","Tiltagende segl","Første kvarter","Tiltagende måne","Fuldmåne","Aftagende måne","Sidste kvarter","Aftagende segl"][Math.round(age/cycle*8)%8]}}
 export function advice(rows,attrs={},zone="UTC"){
- const n=x=>typeof x==="number"&&Number.isFinite(x),temp=x=>attrs.temperature_unit==="°F"?(x-32)*5/9:attrs.temperature_unit==="°C"?x:NaN,wind=x=>({"km/h":x/3.6,"m/s":x,"mph":x*.44704,"kn":x*.514444}[attrs.wind_speed_unit]);
+ const n=x=>typeof x==="number"&&Number.isFinite(x),temp=x=>!n(x)?NaN:attrs.temperature_unit==="°F"?(x-32)*5/9:attrs.temperature_unit==="°C"?x:NaN,wind=x=>!n(x)?NaN:({"km/h":x/3.6,"m/s":x,"mph":x*.44704,"kn":x*.514444}[attrs.wind_speed_unit]);
  const hours=(Array.isArray(rows)?rows:[]).filter(r=>r&&Number.isFinite(Date.parse(r.datetime))).sort((a,b)=>Date.parse(a.datetime)-Date.parse(b.datetime)).slice(0,24),at=r=>weatherTime(r.datetime,zone);
- const hazardous=r=>["lightning","lightning-rainy","hail","pouring","snowy-rainy"].includes(r.condition);
+ const hazardous=r=>["lightning","lightning-rainy","hail","pouring","snowy-rainy","snowy"].includes(r.condition);
  const dry=r=>!hazardous(r)&&n(r.precipitation_probability)&&r.precipitation_probability>=0&&r.precipitation_probability<=20&&r.precipitation===0;
  const good=r=>dry(r)&&n(r.wind_speed)&&wind(r.wind_speed)>=0&&wind(r.wind_speed)<8&&n(r.temperature)&&temp(r.temperature)>=5&&(!n(r.wind_gust_speed)||wind(r.wind_gust_speed)<15);
  const window=(predicate,length)=>hours.find((r,i)=>hours.slice(i,i+length).length===length&&hours.slice(i,i+length).every((v,j)=>predicate(v)&&Date.parse(v.datetime)-Date.parse(r.datetime)===j*3600000));
