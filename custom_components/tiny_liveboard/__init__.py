@@ -12,7 +12,7 @@ import voluptuous as vol
 from .news import NewsEngine, settings
 from .alerts import AlertEngine
 from .radar import RadarEngine
-from .media import MediaEngine
+from .media import MediaEngine, configured_stream
 from .motion import MotionEngine
 
 DOMAIN = "tiny_liveboard"
@@ -218,13 +218,19 @@ async def screen_status(hass, connection, msg):
         result.append({"screen":key,"assigned_profile":profile,**state,"online":age is not None and age<90,"age":age})
     connection.send_result(msg["id"],result)
 
-@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/camera_media", vol.Required("action"): vol.In(("snapshot","start","stop","status")), vol.Required("entity"): vol.Match(r"^camera\.[a-z0-9_]+$"), vol.Optional("minutes", default=30): vol.All(int,vol.Range(min=1,max=60))})
+@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/camera_media", vol.Required("action"): vol.In(("snapshot","start","stop","status")), vol.Required("entity"): vol.Match(r"^camera\.[a-z0-9_]+$"), vol.Optional("slot"): vol.In((0,1)), vol.Optional("profile", default=""): str, vol.Optional("minutes", default=30): vol.All(int,vol.Range(min=1,max=60))})
 @websocket_api.require_admin
 @websocket_api.async_response
 async def camera_media(hass, connection, msg):
     engine = hass.data[DOMAIN]["media"]
     entity = msg["entity"]
     try:
+        source = None
+        if "slot" in msg:
+            cfg = profile_config(hass.data[DOMAIN]["config"], msg["profile"])
+            source = configured_stream(cfg, msg["slot"])
+            if source:
+                entity = "camera.tiny_liveboard_direct_"+str(msg["slot"])
         if msg["action"] == "status":
             result = {"recording": entity in engine.jobs, "elapsed": max(0, int(time.monotonic() - engine.started[entity])) if entity in engine.started else 0}
         elif msg["action"] == "stop":
@@ -232,12 +238,12 @@ async def camera_media(hass, connection, msg):
         elif msg["action"] == "snapshot":
             result = await engine.snapshot(entity)
         else:
-            result = await engine.start(entity, msg["minutes"])
+            result = await engine.start(entity, msg["minutes"], source)
         connection.send_result(msg["id"], result)
     except Exception:
         connection.send_error(msg["id"], "media_failed", "Camera media operation failed; verify camera stream, FFmpeg and media storage")
 
-@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/media_gallery", vol.Required("action"): vol.In(("list","delete","resolve","lock","unlock")), vol.Optional("kind"): vol.In(("snapshots","recordings")), vol.Optional("file"): vol.Match(r"^[a-zA-Z0-9_]+\.(jpg|png|mp4)$")})
+@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/media_gallery", vol.Required("action"): vol.In(("list","delete","resolve","lock","unlock","thumbnail")), vol.Optional("kind"): vol.In(("snapshots","recordings")), vol.Optional("file"): vol.Match(r"^[a-zA-Z0-9_]+\.(jpg|png|mp4)$")})
 @websocket_api.require_admin
 @websocket_api.async_response
 async def media_gallery(hass, connection, msg):
@@ -245,6 +251,8 @@ async def media_gallery(hass, connection, msg):
     try:
         if msg["action"] == "list":
             result = await hass.async_add_executor_job(engine.list_files)
+        elif msg["action"] == "thumbnail":
+            result = await engine.thumbnail(msg["file"])
         elif msg["action"] in ("lock", "unlock"):
             result = await hass.async_add_executor_job(engine.set_locked, msg["kind"], msg["file"], msg["action"] == "lock")
         elif msg["action"] == "delete":
