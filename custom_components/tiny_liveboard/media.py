@@ -7,8 +7,12 @@ import threading
 from pathlib import Path
 from datetime import datetime, timezone
 from uuid import uuid4
-from homeassistant.components.camera import async_get_image
-from homeassistant.components.camera import async_get_stream_source
+async def async_get_image(hass, entity):
+    from homeassistant.components.camera import async_get_image as capture
+    return await capture(hass, entity)
+async def async_get_stream_source(hass, entity):
+    from homeassistant.components.camera import async_get_stream_source as resolve
+    return await resolve(hass, entity)
 
 class MediaEngine:
     def __init__(self, hass):
@@ -74,6 +78,7 @@ class MediaEngine:
                     proc.kill()
                     await proc.wait()
             self.jobs.pop(entity, None)
+            self.started.pop(entity, None)
             return {"recording": False, "file": path.name}
 
     async def close(self):
