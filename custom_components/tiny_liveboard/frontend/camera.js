@@ -1,3 +1,4 @@
+export function cameraMetrics(report,previous=null){const rows=[...report.values()],v=rows.find(x=>x.type==="inbound-rtp"&&(x.kind==="video"||x.mediaType==="video"));if(!v)return null;const codec=rows.find(x=>x.id===v.codecId),dt=previous&&v.id===previous.id?(v.timestamp-previous.timestamp)/1000:0;return {id:v.id,timestamp:v.timestamp,bytes:v.bytesReceived,bitrate:dt>0&&v.bytesReceived>=previous.bytes?Math.round((v.bytesReceived-previous.bytes)*8/dt):null,fps:v.framesPerSecond??null,width:v.frameWidth??null,height:v.frameHeight??null,codec:codec?.mimeType??null,packetsLost:v.packetsLost??null,jitterMs:Number.isFinite(v.jitter)?Math.round(v.jitter*1000):null}}
 export function cameraLayout(w,h,ratios,g=8){
  ratios=[0,1].map(i=>Number.isFinite(ratios?.[i])&&ratios[i]>0?ratios[i]:16/9);w=Math.max(0,Number(w)||0);h=Math.max(0,Number(h)||0);const width=Math.max(0,Math.min(w*.5,(h-3*g)/(1/ratios[0]+1/ratios[1])));
  const heights=ratios.map(r=>width/r);
@@ -5,7 +6,7 @@ export function cameraLayout(w,h,ratios,g=8){
  return {width,cameras:heights.map((height,i)=>({width,height,top:top+(i?heights[0]+g:0)}))};
 }
 export class CameraEngine {
- constructor(element,url,onResize){this.video=element.querySelector("video");this.status=element.querySelector(".camera-status");this.url=url;this.onResize=onResize;this.ratio=16/9;this.closed=false;this.delay=1000;this.lastFrame=0;this.blocked=false;this.video.onplaying=()=>{if(this.closed||!this.pc)return;this.blocked=false;this.status.textContent="LIVE"};this.watch=setInterval(()=>{if(this.closed||!this.pc)return;const t=this.video.currentTime;if(this.pc.connectionState==="connected"&&t===this.lastFrame&&!this.blocked){if(++this.stalls>=3)this.retry(this.pc)}else this.stalls=0;this.lastFrame=t},5000);this.stalls=0;this.video.onresize=()=>{if(this.video.videoWidth&&this.video.videoHeight){this.ratio=this.video.videoWidth/this.video.videoHeight;this.onResize()}}}
+ constructor(element,url,onResize){this.video=element.querySelector("video");this.status=element.querySelector(".camera-status");this.url=url;this.onResize=onResize;this.ratio=16/9;this.closed=false;this.delay=1000;this.lastFrame=0;this.blocked=false;this.video.onplaying=()=>{if(this.closed||!this.pc)return;this.blocked=false;this.status.textContent="LIVE"};this.watch=setInterval(()=>{if(this.closed||!this.pc)return;const t=this.video.currentTime;if(this.pc.connectionState==="connected"&&t===this.lastFrame&&!this.blocked){if(++this.stalls>=3)this.retry(this.pc)}else this.stalls=0;this.lastFrame=t},5000);this.metrics=null;this.statsTimer=setInterval(()=>this.sampleStats(),5000);this.stalls=0;this.video.onresize=()=>{if(this.video.videoWidth&&this.video.videoHeight){this.ratio=this.video.videoWidth/this.video.videoHeight;this.onResize()}}}
  connect(){
   if(this.closed||this.pc||this.retryTimer)return;
   if(!this.url){this.status.textContent="Konfigurer go2rtc i Studio";return}
@@ -24,9 +25,10 @@ export class CameraEngine {
    this.timeout=setTimeout(()=>{if(pc.connectionState!=="connected")this.retry(pc)},15000);
   }catch{this.retry(this.pc)}
  }
+ async sampleStats(){const pc=this.pc;if(!pc||this.closed||this.statsPending)return;this.statsPending=true;try{const report=await pc.getStats();if(this.pc!==pc||this.closed)return;this.metrics=cameraMetrics(report,this.metrics);const m=this.metrics;if(m)this.status.title=[m.width&&m.height?m.width+"×"+m.height:null,m.fps!=null?m.fps+" FPS":null,m.bitrate!=null?Math.round(m.bitrate/1000)+" kbit/s":null,m.codec,m.packetsLost!=null?"Tabte pakker: "+m.packetsLost:null,m.jitterMs!=null?"Jitter: "+m.jitterMs+" ms":null].filter(Boolean).join(" · ")}catch{}finally{this.statsPending=false}}
  retry(pc){if(this.closed||this.pc!==pc||this.retryTimer)return;this.status.textContent="Genopretter forbindelse…";this.retryTimer=setTimeout(()=>{this.retryTimer=null;this.cleanup();this.connect()},this.delay);this.delay=Math.min(this.delay*2,30000)}
- cleanup(){clearTimeout(this.timeout);clearTimeout(this.disconnectTimer);this.stalls=0;this.lastFrame=0;this.blocked=false;const ws=this.ws,pc=this.pc;this.ws=null;this.pc=null;if(ws){ws.onclose=null;ws.onerror=null;ws.onmessage=null;ws.onopen=null;ws.close()}if(pc){pc.onconnectionstatechange=null;pc.ontrack=null;pc.onicecandidate=null;pc.close()}this.video.srcObject=null}
- close(){this.closed=true;clearInterval(this.watch);clearTimeout(this.retryTimer);this.cleanup();this.video.onresize=null;this.video.onplaying=null}
+ cleanup(){this.metrics=null;this.status.title="";clearTimeout(this.timeout);clearTimeout(this.disconnectTimer);this.stalls=0;this.lastFrame=0;this.blocked=false;const ws=this.ws,pc=this.pc;this.ws=null;this.pc=null;if(ws){ws.onclose=null;ws.onerror=null;ws.onmessage=null;ws.onopen=null;ws.close()}if(pc){pc.onconnectionstatechange=null;pc.ontrack=null;pc.onicecandidate=null;pc.close()}this.video.srcObject=null}
+ close(){this.closed=true;clearInterval(this.watch);clearInterval(this.statsTimer);clearTimeout(this.retryTimer);this.cleanup();this.video.onresize=null;this.video.onplaying=null}
 }
 
 export function streamURL(base,name){
