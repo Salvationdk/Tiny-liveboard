@@ -77,3 +77,12 @@ assert.equal(graphSegments(chartRows.map(r=>({...r,v:2})),"v")[0][1][0],156);
 assert.equal(localAlerts([{expires:"invalid",geometry}],55.2,11).local.length,0);
 assert.equal(localAlerts([{effective:"invalid"}],55.2,11).unknown.length,0);
 assert.equal(advice([{datetime:"2026-01-01T00:00:00Z",temperature:null}],{temperature_unit:"°F"}).find(x=>x[0]==="Bilruder")[1],"Ukendt");
+
+const {dmiObservation}=await import("data:text/javascript;base64,"+Buffer.from(source).toString("base64"));
+const nowDmi=Date.parse("2026-01-01T12:00:00Z");
+const measurement=(value,parameterId="wind_speed",observed="2026-01-01T11:50:00Z",coordinates=[11,55])=>({geometry:{type:"Point",coordinates},properties:{value,parameterId,observed,stationId:"test"}});
+const observations=(...features)=>({type:"FeatureCollection",features});
+assert.equal(dmiObservation(observations(measurement(5),measurement(-1),measurement(15,"wind_speed","2026-01-01T10:00:00Z")),55,11,nowDmi,"wind_speed").value,5);
+assert.equal(dmiObservation(observations(measurement(120,"humidity")),55,11,nowDmi,"humidity"),null);
+assert.equal(dmiObservation(observations(measurement(-.1,"precip_past1h")),55,11,nowDmi,"precip_past1h").value,-.1);
+assert.equal(dmiObservation(observations(measurement(5,"wind_speed","2026-01-01T11:50:00Z",[15,55])),55,11,nowDmi,"wind_speed"),null);
