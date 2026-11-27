@@ -5,3 +5,6 @@ Early development build for Home Assistant. Add this repository to HACS as Integ
 Camera playback uses direct go2rtc WebSocket signaling (experimental). Configure ws://host/api/ws?src=stream or wss:// for HTTPS dashboards. Use a trusted private network; do not expose unauthenticated go2rtc publicly. Camera entity selection is retained but does not yet resolve stream URLs automatically. DR RSS retrieval with five-minute cache and explicit breaking categories is implemented; feed availability and category support are not yet verified. Radar, drag-and-drop and weather intelligence are not implemented. Not yet validated on Home Assistant.
 
 News sources: DR, TV 2, TV2 ØST and Google News search for Kalundborg. Select sources in Studio. Regional and local endpoints need live validation.
+
+## News engine
+RSS/Atom, independent five-minute fetch caches, 48-hour article retention, one-hour breaking expiry (explicit categories and valid publication date required), source diagnostics and Studio ticker colors/speed. TV2 ØST and local media use Google News queries; direct feed availability and live integration remain to be verified. Undated articles expire 48 hours after first observation within a running instance.

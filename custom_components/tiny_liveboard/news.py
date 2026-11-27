@@ -1,64 +1,113 @@
-"""RSS parsing and cached retrieval from fixed public sources."""
+"""Bounded, independent RSS cache and conservative breaking-news policy."""
 import asyncio
 import time
+import logging
+import re
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from defusedxml import ElementTree
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-SOURCES = {"DR": "https://www.dr.dk/nyheder/service/feeds/allenyheder", "TV 2": "https://feeds.services.tv2.dk/api/feeds/nyheder/rss", "TV2 ØST": "https://www.tv2east.dk/rss", "Kalundborg": "https://news.google.com/rss/search?q=Kalundborg&hl=da&gl=DK&ceid=DK:da"}
+_LOGGER = logging.getLogger(__name__)
+SOURCES = {
+    "DR": "https://www.dr.dk/nyheder/service/feeds/allenyheder",
+    "TV 2": "https://feeds.services.tv2.dk/api/feeds/nyheder/rss",
+    "TV2 ØST": "https://news.google.com/rss/search?q=site%3Atv2east.dk+OR+site%3Atv2%C3%B8st.dk&hl=da&gl=DK&ceid=DK:da",
+    "Kalundborg": "https://news.google.com/rss/search?q=Kalundborg&hl=da&gl=DK&ceid=DK:da",
+    "P4 Sjælland": "https://www.dr.dk/nyheder/service/feeds/regionale/sjaelland",
+    "Lokale medier": "https://news.google.com/rss/search?q=Kalundborg+%28site%3Asn.dk+OR+site%3Akalundborgnetavis.dk%29&hl=da&gl=DK&ceid=DK:da",
+}
+DEFAULT_SOURCES = list(SOURCES)[:4]
 TTL = 300
+BREAKING_TTL = 3600
+MAX_AGE = 48 * 3600
+MAX_BYTES = 1024 * 1024
+
+def timestamp(value):
+    if not value:
+        return None
+    try:
+        try:
+            dt = parsedate_to_datetime(value)
+        except (ValueError, TypeError):
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return dt.replace(tzinfo=dt.tzinfo or timezone.utc).timestamp()
+    except (ValueError, TypeError, OverflowError):
+        return None
 
 def parse_feed(payload):
     root = ElementTree.fromstring(payload)
+    for node in root.iter():
+        node.tag = node.tag.rsplit("}", 1)[-1]
     items = []
-    for item in root.findall(".//item"):
-        title = (item.findtext("title") or "").strip()
+    for item in root.findall(".//item") + root.findall(".//entry"):
+        title = " ".join((item.findtext("title") or "").split())
         if not title:
             continue
-        categories = [(c.text or "").strip().casefold() for c in item.findall("category")]
-        items.append({"title": title[:300], "breaking": "breaking news" in categories or "breaking" in categories})
-    return items[:30]
+        categories = [(c.get("term") or c.text or "").strip().casefold() for c in item.findall("category")]
+        published = timestamp(item.findtext("pubDate") or item.findtext("published") or item.findtext("updated"))
+        items.append({"title": title[:300], "breaking": bool(set(categories) & {"breaking news", "breaking"}), "published": published})
+    return items[:50]
+
+def settings(config):
+    sources = config.get("sources", DEFAULT_SOURCES)
+    if not isinstance(sources, list):
+        sources = DEFAULT_SOURCES
+    return [name for name in SOURCES if name in sources]
 
 class NewsEngine:
     def __init__(self, hass):
         self.hass = hass
         self.items = {}
-        self.updated = 0
+        self.updated = {}
+        self.status = {}
         self.lock = asyncio.Lock()
 
     async def get(self, selected=None):
-        selected = SOURCES.keys() if selected is None else selected
+        selected = DEFAULT_SOURCES if selected is None else [s for s in SOURCES if s in selected]
         async with self.lock:
-            if time.monotonic() - self.updated < TTL and self.updated:
-                return self.combined(selected)
-            self.updated = time.monotonic()
-            await asyncio.gather(*(self.fetch(name, url) for name, url in SOURCES.items() if name in selected))
+            now = time.monotonic()
+            await asyncio.gather(*(self.fetch(name, SOURCES[name]) for name in selected
+                                   if now - self.updated.get(name, -TTL) >= TTL))
             return self.combined(selected)
 
-    def combined(self, selected):
-        groups = [self.items.get(name, []) for name in SOURCES if name in selected]
-        seen = set()
+    def combined(self, selected, now=None):
+        now = time.time() if now is None else now
         result = []
-        for i in range(30):
+        seen = set()
+        groups = [self.items.get(name, []) for name in selected]
+        for i in range(50):
             for group in groups:
-                if i < len(group):
-                    item = group[i]
-                    key = item["title"].casefold()
-                    if key not in seen:
-                        result.append(item)
-                        seen.add(key)
-        return result
+                if i >= len(group):
+                    continue
+                item = group[i]
+                age = now - (item["published"] or item["received"])
+                if age > MAX_AGE or age < -300:
+                    continue
+                key = re.sub(r"[^\\w]+", " ", item["title"].casefold()).strip()
+                if key in seen:
+                    continue
+                seen.add(key)
+                result.append(dict(item, breaking=bool(item["breaking"] and item["published"] is not None and 0 <= age <= BREAKING_TTL)))
+        return sorted(result, key=lambda item: (not item["breaking"], -(item["published"] or item["received"])))[:60]
 
     async def fetch(self, name, url):
-            try:
-                session = async_get_clientsession(self.hass)
-                async with asyncio.timeout(15):
-                    async with session.get(url, allow_redirects=False) as response:
-                        response.raise_for_status()
-                        if response.status != 200:
-                            return
-                        payload = await response.content.read(1024 * 1024 + 1)
-                        if len(payload) > 1024 * 1024:
-                            return
-                self.items[name] = [dict(item, source=name) for item in await self.hass.async_add_executor_job(parse_feed, payload)]
-            except Exception:
-                pass
+        self.updated[name] = time.monotonic()
+        try:
+            session = async_get_clientsession(self.hass)
+            async with asyncio.timeout(15):
+                async with session.get(url, allow_redirects=False) as response:
+                    if response.status != 200:
+                        raise ValueError(f"HTTP {response.status}")
+                    chunks = bytearray()
+                    async for chunk in response.content.iter_chunked(16384):
+                        chunks.extend(chunk)
+                        if len(chunks) > MAX_BYTES:
+                            raise ValueError("Feed too large")
+            parsed = await self.hass.async_add_executor_job(parse_feed, bytes(chunks))
+            previous = {item["title"]: item["received"] for item in self.items.get(name, [])}
+            self.items[name] = [dict(item, source=name, received=previous.get(item["title"], time.time())) for item in parsed]
+            self.status[name] = {"ok": True, "count": len(parsed), "checked": time.time()}
+        except Exception as exc:
+            self.status[name] = {"ok": False, "checked": time.time(), "error": type(exc).__name__}
+            _LOGGER.debug("News source %s unavailable: %s", name, type(exc).__name__)

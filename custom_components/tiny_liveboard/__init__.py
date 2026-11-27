@@ -4,7 +4,7 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.helpers.storage import Store
 import voluptuous as vol
 
-from .news import NewsEngine
+from .news import NewsEngine, settings
 
 DOMAIN = "tiny_liveboard"
 
@@ -36,10 +36,12 @@ async def save_config(hass, connection, msg):
     data = hass.data[DOMAIN]
     await data["store"].async_save(msg["config"])
     data["config"] = msg["config"]
-    data["news"].updated = 0
+    data["news"].updated.clear()
     connection.send_result(msg["id"])
 
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/news"})
 @websocket_api.async_response
 async def get_news(hass, connection, msg):
-    connection.send_result(msg["id"], await hass.data[DOMAIN]["news"].get(hass.data[DOMAIN]["config"].get("sources")))
+    data = hass.data[DOMAIN]
+    items = await data["news"].get(settings(data["config"]))
+    connection.send_result(msg["id"], {"items": items, "status": data["news"].status})
