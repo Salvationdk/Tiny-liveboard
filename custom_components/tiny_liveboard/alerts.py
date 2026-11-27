@@ -37,6 +37,15 @@ def parse_alerts(payload):
             continue
         seen.add(key)
         item = dict(title=title[:500], area=area[:500], severity=get("severity"), effective=get("onset") or get("effective"), expires=get("expires"), description=get("summary")[:2000])
+        # Preserve source region identifiers; never infer a polygon from a region name.
+        geocodes = []
+        for code in entry.findall("geocode"):
+            name = (code.findtext("valueName") or "").strip()
+            value = (code.findtext("value") or "").strip()
+            if name and value and len(geocodes) < 100:
+                geocodes.append({"name": name[:100], "value": value[:200]})
+        if geocodes:
+            item["geocodes"] = geocodes
         polygons = []
         invalid_geometry = False
         for p in entry.findall("polygon"):
