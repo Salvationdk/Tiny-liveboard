@@ -29,3 +29,21 @@ def test_unknown_format_is_not_empty_success():
     import pytest
     with pytest.raises(ValueError):
         load().parse_alerts(b'<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Unknown</title></entry></feed>')
+
+
+def test_partial_unknown_feed_rejected():
+    import pytest
+    data = b'<feed xmlns="http://www.w3.org/2005/Atom"><entry><status>Actual</status><message_type>Alert</message_type><scope>Public</scope><title>Wind</title></entry><entry><title>Unknown</title></entry></feed>'
+    with pytest.raises(ValueError):
+        load().parse_alerts(data)
+
+
+def test_active_alerts():
+    now = 1767225600
+    items = [
+        {"title": "active", "effective": "2025-12-31T23:00:00Z", "expires": "2026-01-01T01:00:00Z"},
+        {"title": "future", "effective": "2026-01-01T01:00:00Z"},
+        {"title": "expired", "expires": "2026-01-01T00:00:00Z"},
+        {"title": "invalid", "expires": "invalid"},
+    ]
+    assert [a["title"] for a in load().active_alerts(items, now)] == ["active"]
