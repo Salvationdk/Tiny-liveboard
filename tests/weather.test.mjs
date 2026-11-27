@@ -19,3 +19,8 @@ assert.deepEqual(tilePosition(0,0,2),{x:2,y:2});
 const {dailyRows}=await import("data:text/javascript;base64,"+Buffer.from(source).toString("base64"));
 assert.equal(forecastRows([{datetime:"2026-01-01T00:00:00Z"},{datetime:"2026-01-01T01:00:00+01:00"}],Date.parse("2026-01-01T00:00:00Z")).length,1);
 assert.equal(dailyRows([{datetime:"2026-01-01T23:00:00Z"},{datetime:"2026-01-02T23:00:00Z"}],Date.parse("2026-01-02T12:00:00Z"),"Europe/Copenhagen").length,2);
+
+const {weatherTime}=await import("data:text/javascript;base64,"+Buffer.from(source).toString("base64"));
+assert.equal(weatherTime("2026-07-01T12:00:00Z","Europe/Copenhagen"),"14.00".replace(".",":"));
+assert.equal(advice([{temperature:10}],{}).find(x=>x[0]==="Bilruder")[1],"Ukendt");
+assert.equal(advice([],{}).find(x=>x[0]==="Nedbør")[1],"Ingen nedbørsdata");
