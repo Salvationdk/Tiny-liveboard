@@ -5,6 +5,8 @@ import math
 from defusedxml import ElementTree
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .news import timestamp
+from pathlib import Path
+from .regions import load_regions, resolve_regions
 
 URL = "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-denmark"
 
@@ -99,6 +101,14 @@ def active_alerts(items, now):
             result.append(item)
     return result
 
+def parse_with_regions(payload, path):
+    items = parse_alerts(payload)
+    try:
+        index = load_regions(path)
+    except (OSError, ValueError, TypeError, KeyError):
+        index = {}
+    return [resolve_regions(item, index) for item in items]
+
 class AlertEngine:
     def __init__(self, hass):
         self.hass = hass
@@ -122,7 +132,7 @@ class AlertEngine:
                                 raw.extend(chunk)
                                 if len(raw)>2*1024*1024:
                                     raise ValueError("Oversized feed")
-                    self.items = await self.hass.async_add_executor_job(parse_alerts, bytes(raw))
+                    self.items = await self.hass.async_add_executor_job(parse_with_regions, bytes(raw), Path(self.hass.config.path('tiny_liveboard_emma.geojson')))
                     self.success = time.time()
                     self.ok = True
                 except Exception:
