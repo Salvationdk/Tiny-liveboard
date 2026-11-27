@@ -1,4 +1,7 @@
 from pathlib import Path
+from datetime import timedelta
+from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.components.media_source import async_resolve_media
 import asyncio
 import time
 from homeassistant.components import frontend, websocket_api
@@ -88,6 +91,7 @@ async def async_setup_entry(hass, entry):
         await hass.http.async_register_static_paths([StaticPathConfig("/tiny_liveboard", str(Path(__file__).parent / "frontend"), False)])
         websocket_api.async_register_command(hass, get_config)
         websocket_api.async_register_command(hass, camera_media)
+        websocket_api.async_register_command(hass, media_gallery)
         websocket_api.async_register_command(hass, save_config)
         websocket_api.async_register_command(hass, get_news)
         websocket_api.async_register_command(hass, get_dmi)
@@ -96,6 +100,12 @@ async def async_setup_entry(hass, entry):
         websocket_api.async_register_command(hass, screen_heartbeat)
         websocket_api.async_register_command(hass, screen_status)
         hass.data[DOMAIN + "_registered"] = True
+    async def cleanup_media(now):
+        data = hass.data[DOMAIN]
+        days = int(data["config"].get("captureRetention", 0) or 0)
+        if 1 <= days <= 365:
+            await hass.async_add_executor_job(data["media"].cleanup, days)
+    entry.async_on_unload(async_track_time_interval(hass, cleanup_media, timedelta(hours=1)))
     if warnings_enabled(hass.data[DOMAIN]["config"]):
         hass.data[DOMAIN]["alerts"].wis2.start()
     frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard-panel", "module_url": "/tiny_liveboard/display.js?v=0.1.7", "embed_iframe": False, "trust_external": False}}, require_admin=False)
@@ -209,7 +219,7 @@ async def camera_media(hass, connection, msg):
     entity = msg["entity"]
     try:
         if msg["action"] == "status":
-            result = {"recording": entity in engine.jobs}
+            result = {"recording": entity in engine.jobs, "elapsed": max(0, int(time.monotonic() - engine.started[entity])) if entity in engine.started else 0}
         elif msg["action"] == "stop":
             result = await engine.stop(entity)
         elif msg["action"] == "snapshot":
@@ -219,3 +229,24 @@ async def camera_media(hass, connection, msg):
         connection.send_result(msg["id"], result)
     except Exception:
         connection.send_error(msg["id"], "media_failed", "Camera media operation failed; verify camera stream, FFmpeg and media storage")
+
+@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/media_gallery", vol.Required("action"): vol.In(("list","delete","resolve")), vol.Optional("kind"): vol.In(("snapshots","recordings")), vol.Optional("file"): vol.Match(r"^[a-zA-Z0-9_]+\.(jpg|png|mp4)$")})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def media_gallery(hass, connection, msg):
+    engine = hass.data[DOMAIN]["media"]
+    try:
+        if msg["action"] == "list":
+            result = await hass.async_add_executor_job(engine.list_files)
+        elif msg["action"] == "delete":
+            await hass.async_add_executor_job(engine.delete_file, msg["kind"], msg["file"])
+            result = {}
+        else:
+            listing = await hass.async_add_executor_job(engine.list_files)
+            if not any(i["kind"] == msg["kind"] and i["file"] == msg["file"] for i in listing["items"]):
+                raise ValueError("Unknown media")
+            media = await async_resolve_media(hass, "media-source://media_source/local/tiny_liveboard/" + msg["kind"] + "/" + msg["file"], None)
+            result = {"url": media.url}
+        connection.send_result(msg["id"], result)
+    except Exception:
+        connection.send_error(msg["id"], "media_failed", "Media operation failed")
