@@ -1,6 +1,6 @@
-import {applyTheme,themeCSS,themeControls} from "./themes.js";
-import {WeatherEngine,weatherCSS} from "./weather.js";
-import {CameraEngine, cameraLayout, streamURL, discoverStreams} from "./camera.js";
+import {applyTheme,themeCSS,themeControls} from "./themes.js?v=0.1.8";
+import {WeatherEngine,weatherCSS} from "./weather.js?v=0.1.8";
+import {CameraEngine, cameraLayout, streamURL, discoverStreams} from "./camera.js?v=0.1.8";
 export function resolveProfile(base,name){const profile=name&&Object.hasOwn(base.profiles||{},name)?base.profiles[name]:null;return profile&&typeof profile==="object"&&!Array.isArray(profile)?{...base,...profile,profiles:base.profiles,_revision:base._revision}:base}
 export function scheduledProfile(base,screen,now=new Date(),zone="UTC"){
  const fallback=Object.hasOwn(base.screens||{},screen)?base.screens[screen]:"";
