@@ -1,6 +1,7 @@
 """Dedicated MeteoAlarm Atom warning parser and bounded cache."""
 import asyncio
 import time
+import math
 from defusedxml import ElementTree
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .news import timestamp
@@ -57,8 +58,30 @@ def parse_alerts(payload):
                     invalid_geometry = True
             except ValueError:
                 invalid_geometry = True
+        # CAP circles use latitude,longitude and radius in kilometres.
+        for circle in entry.findall("circle"):
+            try:
+                center, radius = (circle.text or "").split()
+                lat, lon = map(float, center.split(","))
+                radius = float(radius)
+                if not (-90 < lat < 90 and -180 <= lon <= 180 and 0 < radius <= 1000):
+                    raise ValueError("Invalid circle")
+                phi, lam, angular = math.radians(lat), math.radians(lon), radius / 6371.0088
+                ring = []
+                for i in range(72):
+                    bearing = i * math.tau / 72
+                    dest = math.asin(math.sin(phi)*math.cos(angular)+math.cos(phi)*math.sin(angular)*math.cos(bearing))
+                    dl = math.atan2(math.sin(bearing)*math.sin(angular)*math.cos(phi),math.cos(angular)-math.sin(phi)*math.sin(dest))
+                    ring.append([((math.degrees(lam+dl)+180)%360)-180, math.degrees(dest)])
+                ring.append(ring[0])
+                if any(abs(a[0]-b[0])>180 for a,b in zip(ring,ring[1:])):
+                    raise ValueError("Dateline crossing")
+                polygons.append([ring])
+            except (ValueError, OverflowError):
+                invalid_geometry = True
         if polygons and not invalid_geometry:
             item["geometry"] = {"type":"MultiPolygon","coordinates":polygons}
+        item["geometry_status"] = "available" if "geometry" in item else "invalid" if invalid_geometry else "unresolved_region" if geocodes else "missing"
         result.append(item)
     if entries and recognized != len(entries):
         raise ValueError("Unrecognized warning format")
