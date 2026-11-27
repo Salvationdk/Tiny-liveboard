@@ -1,0 +1,17 @@
+{
+  "domain": "tiny_liveboard",
+  "name": "Tiny LiveBoard",
+  "version": "0.1.0",
+  "documentation": "https://github.com/Salvationdk/Tiny-liveboard",
+  "issue_tracker": "https://github.com/Salvationdk/Tiny-liveboard/issues",
+  "codeowners": [
+    "@Salvationdk"
+  ],
+  "config_flow": true,
+  "iot_class": "local_polling",
+  "integration_type": "service",
+  "dependencies": [
+    "frontend",
+    "http"
+  ]
+}
