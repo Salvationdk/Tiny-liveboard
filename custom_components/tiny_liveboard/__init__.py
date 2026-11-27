@@ -230,7 +230,7 @@ async def camera_media(hass, connection, msg):
     except Exception:
         connection.send_error(msg["id"], "media_failed", "Camera media operation failed; verify camera stream, FFmpeg and media storage")
 
-@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/media_gallery", vol.Required("action"): vol.In(("list","delete","resolve")), vol.Optional("kind"): vol.In(("snapshots","recordings")), vol.Optional("file"): vol.Match(r"^[a-zA-Z0-9_]+\.(jpg|png|mp4)$")})
+@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/media_gallery", vol.Required("action"): vol.In(("list","delete","resolve","lock","unlock")), vol.Optional("kind"): vol.In(("snapshots","recordings")), vol.Optional("file"): vol.Match(r"^[a-zA-Z0-9_]+\.(jpg|png|mp4)$")})
 @websocket_api.require_admin
 @websocket_api.async_response
 async def media_gallery(hass, connection, msg):
@@ -238,6 +238,8 @@ async def media_gallery(hass, connection, msg):
     try:
         if msg["action"] == "list":
             result = await hass.async_add_executor_job(engine.list_files)
+        elif msg["action"] in ("lock", "unlock"):
+            result = await hass.async_add_executor_job(engine.set_locked, msg["kind"], msg["file"], msg["action"] == "lock")
         elif msg["action"] == "delete":
             await hass.async_add_executor_job(engine.delete_file, msg["kind"], msg["file"])
             result = {}
