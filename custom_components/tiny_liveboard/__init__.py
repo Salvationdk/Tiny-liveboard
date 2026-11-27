@@ -17,7 +17,7 @@ async def async_setup_entry(hass, entry):
         websocket_api.async_register_command(hass, save_config)
         websocket_api.async_register_command(hass, get_news)
         hass.data[DOMAIN + "_registered"] = True
-    frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard", "js_url": "/tiny_liveboard/display.js", "embed_iframe": False, "trust_external": False}}, require_admin=False)
+    frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard", "module_url": "/tiny_liveboard/display.js", "embed_iframe": False, "trust_external": False}}, require_admin=False)
     return True
 
 async def async_unload_entry(hass, entry):

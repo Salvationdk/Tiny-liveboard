@@ -11,4 +11,5 @@ jobs:
       - run: pip install pytest defusedxml
       - run: python -m compileall -q custom_components
       - run: pytest -q
-      - run: node --check custom_components/tiny_liveboard/frontend/display.js
+      - run: node --input-type=module --check < custom_components/tiny_liveboard/frontend/display.js
+      - run: node tests/camera.test.mjs
