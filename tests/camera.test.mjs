@@ -9,3 +9,7 @@ assert.equal(streamURL("http://localhost:1984","front garden"),"ws://localhost:1
 assert.equal(streamURL("https://example.org/proxy/","a&b"),"wss://example.org/proxy/api/ws?src=a%26b");
 assert.throws(()=>streamURL("http://user:pass@localhost","x"));
 assert.deepEqual(await discoverStreams("http://localhost:1984",async url=>{assert.equal(url,"http://localhost:1984/api/streams");return {ok:true,json:async()=>({z:{},a:{}})}}),["a","z"]);
+
+for(const ratios of [[0,NaN],[],[Infinity,-1]]){const l=cameraLayout(1920,1080,ratios);assert.ok(l.cameras.every(c=>Number.isFinite(c.height)&&c.height>0))}
+await assert.rejects(discoverStreams("http://localhost:1984",async()=>({ok:false,status:503})),/503/);
+await assert.rejects(discoverStreams("http://localhost:1984",async()=>({ok:true,json:async()=>[]})),/Invalid/);
