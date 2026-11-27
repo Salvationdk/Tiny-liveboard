@@ -12,10 +12,12 @@ def notification(payload):
     if not isinstance(data, dict) or data.get("type") != "Feature":
         return None
     props = data.get("properties") or {}
-    if props.get("countryCode") != "DK":
+    if not isinstance(props,dict) or props.get("countryCode") != "DK":
         return None
     links = {}
-    for link in data.get("links", []):
+    for link in data.get("links", []) or []:
+        if not isinstance(link,dict):
+            continue
         rel = link.get("rel")
         if rel not in ("geometry", "xml"):
             continue
@@ -24,7 +26,7 @@ def notification(payload):
         if url.scheme != "https" or not url.hostname or url.username or url.password or url.port not in (None, 443):
             raise ValueError("Unsafe resource URL")
         links[rel] = href
-    if not props.get("alertId") or "geometry" not in links or "xml" not in links:
+    if not props.get("alertId") or "xml" not in links:
         return None
     return {"id": props["alertId"], "feature_id": data.get("id"), "links": links,
             "references": props.get("referencedAlertIds", []),
@@ -70,7 +72,7 @@ def parse_cap(payload, notice, geometry=None):
     kind = get(root,"msgType")
     identifier = get(root,"identifier")
     sent = timestamp(get(root,"sent"))
-    if not identifier or sent is None or kind not in ("Alert","Update","Cancel"):
+    if not identifier or identifier != notice.get("id") or sent is None or kind not in ("Alert","Update","Cancel"):
         return None
     refs = []
     for ref in get(root,"references").split():
@@ -121,7 +123,7 @@ class WarningIndex:
             for key,record in list(self.records.items()):
                 if record["id"]==ref and record["sent"]<=sent:
                     del self.records[key]
-        key=(identifier,str(feature_id))
+        key=(identifier,str(feature_id) if feature_id is not None else str([(i.get("area"),i.get("title")) for i in event["items"]]))
         if event["items"] and sent>=self.records.get(key,{}).get("sent",float("-inf")):
             self.records[key]=event
         self.prune(now)
@@ -183,6 +185,8 @@ class WIS2Client:
         cap=await self.download(notice["links"]["xml"],2*1024*1024)
         geometry=None
         try:
+            if "geometry" not in notice["links"]:
+                raise ValueError("No geometry link")
             raw=await self.download(notice["links"]["geometry"],4*1024*1024)
             geometry=await self.hass.async_add_executor_job(exact_geometry,raw)
         except Exception:
