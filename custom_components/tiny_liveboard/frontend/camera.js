@@ -5,7 +5,7 @@ export function cameraLayout(w,h,ratios,g=8){
  return {width,cameras:heights.map((height,i)=>({width,height,top:top+(i?heights[0]+g:0)}))};
 }
 export class CameraEngine {
- constructor(element,url,onResize){this.video=element.querySelector("video");this.status=element.querySelector(".camera-status");this.url=url;this.onResize=onResize;this.ratio=16/9;this.closed=false;this.delay=1000;this.lastFrame=0;this.watch=setInterval(()=>{if(this.closed||!this.pc)return;const t=this.video.currentTime;if(this.pc.connectionState==="connected"&&t===this.lastFrame&&!this.video.paused){if(++this.stalls>=3)this.retry(this.pc)}else this.stalls=0;this.lastFrame=t},5000);this.stalls=0;this.video.onresize=()=>{if(this.video.videoWidth&&this.video.videoHeight){this.ratio=this.video.videoWidth/this.video.videoHeight;this.onResize()}}}
+ constructor(element,url,onResize){this.video=element.querySelector("video");this.status=element.querySelector(".camera-status");this.url=url;this.onResize=onResize;this.ratio=16/9;this.closed=false;this.delay=1000;this.lastFrame=0;this.blocked=false;this.video.onplaying=()=>{if(this.closed||!this.pc)return;this.blocked=false;this.status.textContent="LIVE"};this.watch=setInterval(()=>{if(this.closed||!this.pc)return;const t=this.video.currentTime;if(this.pc.connectionState==="connected"&&t===this.lastFrame&&!this.blocked){if(++this.stalls>=3)this.retry(this.pc)}else this.stalls=0;this.lastFrame=t},5000);this.stalls=0;this.video.onresize=()=>{if(this.video.videoWidth&&this.video.videoHeight){this.ratio=this.video.videoWidth/this.video.videoHeight;this.onResize()}}}
  connect(){
   if(this.closed||this.pc||this.retryTimer)return;
   if(!this.url){this.status.textContent="Konfigurer go2rtc i Studio";return}
@@ -15,9 +15,9 @@ export class CameraEngine {
    const pc=this.pc=new RTCPeerConnection();const ws=this.ws=new WebSocket(url);let candidates=[],remote=false;
    const send=(type,value)=>{if(ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type,value}))};
    pc.addTransceiver("video",{direction:"recvonly"});
-   pc.ontrack=e=>{if(this.pc!==pc)return;this.video.srcObject=e.streams[0]||new MediaStream([e.track]);this.video.play().catch(()=>{if(this.pc===pc)this.status.textContent="Afspilning blokeret"});this.status.textContent="Modtager stream…";e.track.onended=()=>this.retry(pc)};
+   pc.ontrack=e=>{if(this.pc!==pc)return;this.video.srcObject=e.streams[0]||new MediaStream([e.track]);this.status.textContent="Modtager stream…";this.video.play().catch(()=>{if(this.pc===pc){this.blocked=true;this.status.textContent="Afspilning blokeret"}});e.track.onended=()=>this.retry(pc)};
    pc.onicecandidate=e=>{if(e.candidate)send("webrtc/candidate",e.candidate.candidate)};
-   pc.onconnectionstatechange=()=>{if(this.pc!==pc)return;if(pc.connectionState==="connected"){clearTimeout(this.timeout);clearTimeout(this.disconnectTimer);this.delay=1000;this.status.textContent="LIVE"}else if(pc.connectionState==="failed")this.retry(pc);else if(pc.connectionState==="disconnected"){clearTimeout(this.disconnectTimer);this.disconnectTimer=setTimeout(()=>{if(pc.connectionState==="disconnected")this.retry(pc)},5000)}};
+   pc.onconnectionstatechange=()=>{if(this.pc!==pc)return;if(pc.connectionState==="connected"){clearTimeout(this.timeout);clearTimeout(this.disconnectTimer);clearTimeout(this.retryTimer);this.retryTimer=null;this.delay=1000;if(!this.blocked)this.status.textContent=this.video.readyState>=2&&!this.video.paused?"LIVE":"Afventer videobillede…"}else if(pc.connectionState==="failed")this.retry(pc);else if(pc.connectionState==="disconnected"){clearTimeout(this.disconnectTimer);this.disconnectTimer=setTimeout(()=>{if(pc.connectionState==="disconnected")this.retry(pc)},5000)}};
    ws.onopen=async()=>{try{const offer=await pc.createOffer();await pc.setLocalDescription(offer);send("webrtc/offer",pc.localDescription.sdp)}catch{this.retry(pc)}};
    ws.onmessage=async e=>{if(this.pc!==pc)return;try{const msg=JSON.parse(e.data);if(msg.type==="webrtc/answer"){await pc.setRemoteDescription({type:"answer",sdp:msg.value});remote=true;for(const c of candidates)await pc.addIceCandidate(c);candidates=[]}else if(msg.type==="webrtc/candidate"&&msg.value){const c={candidate:msg.value,sdpMid:"0"};if(remote)await pc.addIceCandidate(c);else candidates.push(c)}else if(msg.type==="error")this.retry(pc)}catch{this.retry(pc)}};
    ws.onerror=()=>this.retry(pc);ws.onclose=()=>{if(pc.connectionState!=="connected")this.retry(pc)};
@@ -25,8 +25,8 @@ export class CameraEngine {
   }catch{this.retry(this.pc)}
  }
  retry(pc){if(this.closed||this.pc!==pc||this.retryTimer)return;this.status.textContent="Genopretter forbindelse…";this.retryTimer=setTimeout(()=>{this.retryTimer=null;this.cleanup();this.connect()},this.delay);this.delay=Math.min(this.delay*2,30000)}
- cleanup(){clearTimeout(this.timeout);clearTimeout(this.disconnectTimer);this.stalls=0;this.lastFrame=0;const ws=this.ws,pc=this.pc;this.ws=null;this.pc=null;if(ws){ws.onclose=null;ws.onerror=null;ws.onmessage=null;ws.onopen=null;ws.close()}if(pc){pc.onconnectionstatechange=null;pc.ontrack=null;pc.onicecandidate=null;pc.close()}this.video.srcObject=null}
- close(){this.closed=true;clearInterval(this.watch);clearTimeout(this.retryTimer);this.cleanup();this.video.onresize=null}
+ cleanup(){clearTimeout(this.timeout);clearTimeout(this.disconnectTimer);this.stalls=0;this.lastFrame=0;this.blocked=false;const ws=this.ws,pc=this.pc;this.ws=null;this.pc=null;if(ws){ws.onclose=null;ws.onerror=null;ws.onmessage=null;ws.onopen=null;ws.close()}if(pc){pc.onconnectionstatechange=null;pc.ontrack=null;pc.onicecandidate=null;pc.close()}this.video.srcObject=null}
+ close(){this.closed=true;clearInterval(this.watch);clearTimeout(this.retryTimer);this.cleanup();this.video.onresize=null;this.video.onplaying=null}
 }
 
 export function streamURL(base,name){
