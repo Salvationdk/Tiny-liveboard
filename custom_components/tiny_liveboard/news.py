@@ -83,18 +83,18 @@ class NewsEngine:
         seen = set()
         groups = [self.items.get(name, []) for name in selected]
         for i in range(50):
-            for group in groups:
+            for source, group in zip(selected, groups):
                 if i >= len(group):
                     continue
                 item = group[i]
-                age = now - (item["published"] or item["received"])
+                age = now - (item["published"] if item["published"] is not None else item["received"])
                 if age > MAX_AGE or age < -300:
                     continue
                 key = re.sub(r"[^\w]+", " ", unicodedata.normalize("NFKC", item["title"]).casefold()).strip()
                 if key in seen:
                     continue
                 seen.add(key)
-                result.append(dict(item, breaking=bool(self.status.get(item.get("source"), {}).get("ok", True) and item["breaking"] and item["published"] is not None and 0 <= age <= BREAKING_TTL)))
+                result.append(dict(item, breaking=bool(self.status.get(item.get("source", source), {}).get("ok", True) and item["breaking"] and item["published"] is not None and 0 <= age <= BREAKING_TTL)))
         return sorted(result, key=lambda item: (not item["breaking"], -(item["published"] or item["received"])))[:60]
 
     async def fetch(self, name, url):
