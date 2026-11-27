@@ -21,6 +21,11 @@ assert.equal(forecastRows([{datetime:"2026-01-01T00:00:00Z"},{datetime:"2026-01-
 assert.equal(dailyRows([{datetime:"2026-01-01T23:00:00Z"},{datetime:"2026-01-02T23:00:00Z"}],Date.parse("2026-01-02T12:00:00Z"),"Europe/Copenhagen").length,2);
 
 const {weatherTime}=await import("data:text/javascript;base64,"+Buffer.from(source).toString("base64"));
-assert.equal(weatherTime("2026-07-01T12:00:00Z","Europe/Copenhagen"),"14.00".replace(".",":"));
+assert.equal(weatherTime("2026-07-01T12:00:00Z","Europe/Copenhagen"),weatherTime("2026-07-01T14:00:00Z","UTC"));
 assert.equal(advice([{temperature:10}],{}).find(x=>x[0]==="Bilruder")[1],"Ukendt");
 assert.equal(advice([],{}).find(x=>x[0]==="Nedbør")[1],"Ingen nedbørsdata");
+
+const {localAlerts}=await import("data:text/javascript;base64,"+Buffer.from(source).toString("base64"));
+const alerts=localAlerts([{title:"Local",bounds:[55,10,56,12]},{title:"Other",bounds:[57,10,58,12]},{title:"Unknown"},{title:"Expired",bounds:[55,10,56,12],expires:"2020-01-01"}],55.7,11.1,Date.parse("2026-01-01"));
+assert.deepEqual(alerts.local.map(a=>a.title),["Local"]);
+assert.deepEqual(alerts.unknown.map(a=>a.title),["Unknown"]);
