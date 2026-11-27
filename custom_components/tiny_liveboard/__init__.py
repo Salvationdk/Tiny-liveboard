@@ -58,5 +58,5 @@ async def get_dmi(hass, connection, msg):
     async with engine.lock:
         import time
         if time.monotonic() - engine.updated.get("DMI", -300) >= 300:
-            await engine.fetch("DMI", "https://www.dmi.dk/rss/varsler")
+            await engine.fetch("DMI", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-denmark")
         connection.send_result(msg["id"], {"ok": engine.status.get("DMI", {}).get("ok", False), "items": engine.items.get("DMI", [])})
