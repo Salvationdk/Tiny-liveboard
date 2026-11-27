@@ -135,3 +135,84 @@ class WarningIndex:
     def items(self,now):
         self.prune(now)
         return [item for event in self.records.values() for item in event["items"]]
+
+
+class WIS2Client:
+    """Independent public WIS2 subscriber; no local MQTT integration required."""
+    def __init__(self, hass):
+        self.hass=hass
+        self.index=WarningIndex()
+        self.task=None
+        self.connected=False
+        self.last_success=None
+
+    def start(self):
+        if self.task is None or self.task.done():
+            self.task=self.hass.async_create_background_task(self.run(),"tiny_liveboard_wis2")
+
+    async def stop(self):
+        import asyncio
+        if self.task:
+            self.task.cancel()
+            await asyncio.gather(self.task,return_exceptions=True)
+            self.task=None
+
+    async def download(self, url, limit):
+        import asyncio
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+        parsed=urlsplit(url)
+        host=parsed.hostname or ""
+        if parsed.scheme!="https" or parsed.username or parsed.password or parsed.port not in (None,443) or not (host=="meteoalarm.org" or host.endswith(".meteoalarm.org")):
+            raise ValueError("Untrusted WIS2 resource host")
+        async with asyncio.timeout(15):
+            async with async_get_clientsession(self.hass).get(url,allow_redirects=False) as response:
+                if response.status!=200:
+                    raise ValueError("Resource HTTP failure")
+                result=bytearray()
+                async for chunk in response.content.iter_chunked(16384):
+                    result.extend(chunk)
+                    if len(result)>limit:
+                        raise ValueError("Oversized resource")
+                return bytes(result)
+
+    async def handle(self,payload):
+        import time
+        notice=notification(payload)
+        if not notice:
+            return
+        cap=await self.download(notice["links"]["xml"],2*1024*1024)
+        geometry=None
+        try:
+            raw=await self.download(notice["links"]["geometry"],4*1024*1024)
+            geometry=await self.hass.async_add_executor_job(exact_geometry,raw)
+        except Exception:
+            pass
+        event=await self.hass.async_add_executor_job(parse_cap,cap,notice,geometry)
+        if event:
+            self.index.apply(event,notice["feature_id"],time.time())
+            self.last_success=time.time()
+
+    async def run(self):
+        import asyncio
+        import ssl
+        import aiomqtt
+        delay=5
+        while True:
+            try:
+                async with aiomqtt.Client("globalbroker.meteo.fr",port=8883,username="everyone",password="everyone",tls_context=ssl.create_default_context(),timeout=20,max_queued_incoming_messages=256) as client:
+                    await client.subscribe(TOPIC,qos=1)
+                    self.connected=True
+                    delay=5
+                    async for message in client.messages:
+                        try:
+                            await self.handle(message.payload)
+                        except Exception:
+                            continue
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+            finally:
+                self.connected=False
+            await asyncio.sleep(delay)
+            delay=min(delay*2,300)
