@@ -24,7 +24,7 @@ def parse_alerts(payload):
             return (entry.findtext(key) or "").strip()
         status = get("status").lower()
         message_type = (get("message_type") or get("msgType")).lower()
-        if status and message_type:
+        if status and message_type and get("scope"):
             recognized += 1
         if status != "actual" or message_type not in ("alert", "update"):
             continue
@@ -60,8 +60,20 @@ def parse_alerts(payload):
         if polygons and not invalid_geometry:
             item["geometry"] = {"type":"MultiPolygon","coordinates":polygons}
         result.append(item)
-    if entries and not recognized:
+    if entries and recognized != len(entries):
         raise ValueError("Unrecognized warning format")
+    return result
+
+def active_alerts(items, now):
+    """Exclude expired, future and invalid timestamp warnings."""
+    result = []
+    for item in items:
+        start = timestamp(item.get("effective"))
+        end = timestamp(item.get("expires"))
+        if (item.get("effective") and start is None) or (item.get("expires") and end is None):
+            continue
+        if (start is None or start <= now) and (end is None or end > now):
+            result.append(item)
     return result
 
 class AlertEngine:
@@ -93,4 +105,4 @@ class AlertEngine:
                 except Exception:
                     self.ok = False
             now = time.time()
-            return {"ok":self.ok,"last_success":self.success,"items":[a for a in self.items if timestamp(a["expires"]) is None or timestamp(a["expires"])>now]}
+            return {"ok":self.ok,"last_success":self.success,"items":active_alerts(self.items, now)}
