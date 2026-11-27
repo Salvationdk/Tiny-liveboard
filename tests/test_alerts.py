@@ -47,3 +47,16 @@ def test_active_alerts():
         {"title": "invalid", "expires": "invalid"},
     ]
     assert [a["title"] for a in load().active_alerts(items, now)] == ["active"]
+
+
+def test_circle_and_unresolved_geocode():
+    def parse(extra):
+        return load().parse_alerts(('<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Wind</title><status>Actual</status><message_type>Alert</message_type><scope>Public</scope>'+extra+'</entry></feed>').encode())[0]
+    circle = parse('<circle>55,11 10</circle>')
+    assert circle["geometry_status"] == "available"
+    ring = circle["geometry"]["coordinates"][0][0]
+    assert len(ring) == 73 and ring[0] == ring[-1]
+    assert parse('<circle>55,11 -10</circle>')["geometry_status"] == "invalid"
+    region = parse('<geocode><valueName>EMMA_ID</valueName><value>DK001</value></geocode>')
+    assert region["geometry_status"] == "unresolved_region"
+    assert "geometry" not in region
