@@ -12,6 +12,39 @@ from .radar import RadarEngine
 
 DOMAIN = "tiny_liveboard"
 
+def validate_layout(config):
+    import math
+    def number(v):
+        return type(v) in (int,float) and math.isfinite(v)
+    def box(v):
+        return isinstance(v,dict) and all(number(v.get(k)) for k in ("x","y","w","h")) and v["x"]>=0 and v["y"]>=0 and v["w"]>=10 and v["h"]>=10 and v["x"]+v["w"]<=100.000001 and v["y"]+v["h"]<=100.000001
+    layout=config.get("layout")
+    if layout is not None and (not isinstance(layout,dict) or not all(box(layout.get(k)) for k in ("c0","c1","weather"))):
+        raise ValueError("Invalid main layout")
+    widgets=config.get("widgets",[])
+    if not isinstance(widgets,list) or len(widgets)>20:
+        raise ValueError("Invalid widget list")
+    for widget in widgets:
+        if not box(widget) or type(widget.get("z")) is not int or not 0<=widget["z"]<=9:
+            raise ValueError("Invalid widget geometry")
+        kind=widget.get("kind","state")
+        if kind not in ("state","toggle","button","brightness","temperature","history","gauge","lovelace"):
+            raise ValueError("Unsupported widget type")
+        if kind=="lovelace":
+            card=widget.get("card")
+            if not isinstance(card,dict) or not isinstance(card.get("type"),str) or not card["type"]:
+                raise ValueError("Invalid Lovelace card")
+        elif not isinstance(widget.get("entity"),str):
+            raise ValueError("Invalid widget entity")
+    for key in ("visibility","layers"):
+        values=config.get(key,{})
+        if not isinstance(values,dict):
+            raise ValueError("Invalid "+key)
+        for value in values.values():
+            if key=="visibility" and type(value) is not bool or key=="layers" and (not number(value) or not 0<=value<=9):
+                raise ValueError("Invalid "+key)
+    return config
+
 def validate_screen_config(config):
     import re
     import json
@@ -35,6 +68,9 @@ def validate_screen_config(config):
         start,end=rule.get("start"),rule.get("end")
         if not all(isinstance(t,str) and re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]",t) for t in (start,end)) or start==end:
             raise ValueError("Invalid schedule interval")
+    validate_layout(config)
+    for profile in profiles.values():
+        validate_layout(profile)
     return config
 
 async def async_setup_entry(hass, entry):
