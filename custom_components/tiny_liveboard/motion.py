@@ -34,7 +34,11 @@ class MotionEngine:
             entity = cfg.get("camera"+str(i), "")
             if cfg.get("motion"+str(i)) == "yes" and re.fullmatch(r"camera\.[a-z0-9_]+", entity or "") and entity not in seen:
                 seen.add(entity)
-                self.tasks.append(asyncio.create_task(self.run(entity, cfg, str(i))))
+                external = cfg.get("motionSensor"+str(i), "")
+                if cfg.get("motionMethod"+str(i)) == "external" and re.fullmatch(r"binary_sensor\.[a-z0-9_]+", external or ""):
+                    self.tasks.append(asyncio.create_task(self.run_external(entity, external, cfg, str(i))))
+                else:
+                    self.tasks.append(asyncio.create_task(self.run(entity, cfg, str(i))))
 
     async def close(self):
         for task in self.tasks:
@@ -120,6 +124,43 @@ class MotionEngine:
         finally:
             self.hass.states.async_remove(sensor)
             self.hass.states.async_remove(level_sensor)
+
+    async def run_external(self, entity, external, cfg, i):
+        sensor = "binary_sensor.tiny_liveboard_camera_"+str(int(i)+1)+"_motion"
+        active = False
+        last = 0
+        try:
+            post = max(5,min(120,int(cfg.get("motionPost"+i,20))))
+        except (ValueError,TypeError):
+            post = 20
+        try:
+            while True:
+                state = self.hass.states.get(external)
+                now = time.monotonic()
+                if state and state.state == "on":
+                    last = now
+                    if not active:
+                        active = True
+                        self.history.append({"camera":entity,"time":time.time(),"level":100})
+                        self.store.async_delay_save(lambda: {"items":list(self.history)},5)
+                        self.hass.bus.async_fire("tiny_liveboard_motion",{"camera":entity,"level":100,"source":external})
+                        for action in ("snapshot","record"):
+                            try:
+                                if action == "snapshot" and cfg.get("motionSnapshot"+i) == "yes":
+                                    await self.media.snapshot(entity)
+                                if action == "record" and cfg.get("motionRecord"+i) == "yes" and entity not in self.media.jobs:
+                                    await self.media.start(entity,30)
+                                    self.owned[entity] = self.media.jobs[entity][0]
+                            except Exception:
+                                _LOGGER.warning("External motion capture failed for %s",entity)
+                elif active and now-last >= post:
+                    active = False
+                    await self.stop_owned(entity)
+                self.hass.states.async_set(sensor,"on" if active else "off" if state and state.state in ("on","off") else "unavailable",{"device_class":"motion","camera":entity,"source":external})
+                await asyncio.sleep(1)
+        finally:
+            await self.stop_owned(entity)
+            self.hass.states.async_remove(sensor)
 
     async def stop_owned(self, entity):
         proc = self.owned.pop(entity,None)
