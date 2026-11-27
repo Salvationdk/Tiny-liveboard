@@ -13,5 +13,8 @@
   "dependencies": [
     "frontend",
     "http"
+  ],
+  "requirements": [
+    "aiomqtt==2.4.0"
   ]
 }
