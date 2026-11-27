@@ -199,7 +199,12 @@ class WIS2Client:
     async def run(self):
         import asyncio
         import ssl
-        import aiomqtt
+        try:
+            import aiomqtt
+        except ImportError:
+            import logging
+            logging.getLogger(__name__).info("WIS2 MQTT unavailable; using HTTP warning feed")
+            return
         delay=5
         while True:
             try:
