@@ -1,1 +1,18 @@
-{"config":{"step":{"user":{"title":"Tiny LiveBoard","description":"Install the display and editor."}},"abort":{"single_instance_allowed":"Already configured"}}}
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Tiny LiveBoard",
+        "description": "Select existing Home Assistant entities. Additional settings are available in Studio.",
+        "data": {
+          "camera0": "Camera 1",
+          "camera1": "Camera 2",
+          "weather": "Weather"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Already configured"
+    }
+  }
+}
