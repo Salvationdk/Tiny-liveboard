@@ -10,3 +10,8 @@ assert.ok(graphPoints([{temperature:0}],"temperature").flat().every(Number.isFin
 const {moon,advice}=await import("data:text/javascript;base64,"+Buffer.from(source).toString("base64"));
 assert.equal(moon(new Date("2000-01-06T18:14:00Z")).phase,"Nymåne");
 assert.equal(advice([],{}).find(x=>x[0]==="Bilruder")[1],"Ukendt");
+
+const {solar,tilePosition}=await import("data:text/javascript;base64,"+Buffer.from(source).toString("base64"));
+assert.equal(solar(new Date(),100,0),null);
+assert.ok(solar(new Date("2026-06-21"),55.7,11.1).minutes>900);
+assert.deepEqual(tilePosition(0,0,2),{x:2,y:2});
