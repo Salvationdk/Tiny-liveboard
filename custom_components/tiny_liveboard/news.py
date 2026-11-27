@@ -4,6 +4,7 @@ import time
 import logging
 import re
 import unicodedata
+from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -38,6 +39,33 @@ def timestamp(value):
     except (ValueError, TypeError, OverflowError):
         return None
 
+class NewsText(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self.skip = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style"):
+            self.skip += 1
+        elif tag in ("p", "br", "div", "li"):
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style"):
+            self.skip = max(0, self.skip - 1)
+        elif tag in ("p", "div", "li"):
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.parts.append(data)
+
+def news_text(value):
+    parser = NewsText()
+    parser.feed((value or "")[:40000])
+    return "\n".join(" ".join(line.split()) for line in "".join(parser.parts).splitlines() if line.strip())[:12000]
+
 def parse_feed(payload):
     root = ElementTree.fromstring(payload)
     for node in root.iter():
@@ -53,7 +81,9 @@ def parse_feed(payload):
             continue
         categories = [(c.get("term") or c.text or "").strip().casefold() for c in item.findall("category")]
         published = timestamp(item.findtext("pubDate") or item.findtext("published") or item.findtext("updated"))
-        items.append({"title": title[:300], "breaking": bool(set(categories) & {"breaking news", "breaking"}), "published": published})
+        publisher = item.findtext("source") or ""
+        body = news_text(item.findtext("encoded") or item.findtext("content") or item.findtext("description") or item.findtext("summary"))
+        items.append({"publisher": publisher[:100], "body": body, "title": title[:300], "breaking": bool(set(categories) & {"breaking news", "breaking"}), "published": published})
     return items[:50]
 
 def settings(config):
