@@ -15,3 +15,7 @@ const {solar,tilePosition}=await import("data:text/javascript;base64,"+Buffer.fr
 assert.equal(solar(new Date(),100,0),null);
 assert.ok(solar(new Date("2026-06-21"),55.7,11.1).minutes>900);
 assert.deepEqual(tilePosition(0,0,2),{x:2,y:2});
+
+const {dailyRows}=await import("data:text/javascript;base64,"+Buffer.from(source).toString("base64"));
+assert.equal(forecastRows([{datetime:"2026-01-01T00:00:00Z"},{datetime:"2026-01-01T01:00:00+01:00"}],Date.parse("2026-01-01T00:00:00Z")).length,1);
+assert.equal(dailyRows([{datetime:"2026-01-01T23:00:00Z"},{datetime:"2026-01-02T23:00:00Z"}],Date.parse("2026-01-02T12:00:00Z"),"Europe/Copenhagen").length,2);
