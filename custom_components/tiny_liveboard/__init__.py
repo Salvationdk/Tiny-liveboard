@@ -1,5 +1,6 @@
 from pathlib import Path
 import asyncio
+import time
 from homeassistant.components import frontend, websocket_api
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.helpers.storage import Store
@@ -13,7 +14,7 @@ DOMAIN = "tiny_liveboard"
 
 async def async_setup_entry(hass, entry):
     store = Store(hass, 1, DOMAIN)
-    hass.data[DOMAIN] = {"news": NewsEngine(hass), "alerts": AlertEngine(hass), "radar": RadarEngine(hass), "store": store, "save_lock": asyncio.Lock(), "config": await store.async_load() or {}}
+    hass.data[DOMAIN] = {"news": NewsEngine(hass), "alerts": AlertEngine(hass), "radar": RadarEngine(hass), "store": store, "save_lock": asyncio.Lock(), "screens_live": {}, "config": await store.async_load() or {}}
     if not hass.data.get(DOMAIN + "_registered"):
         await hass.http.async_register_static_paths([StaticPathConfig("/tiny_liveboard", str(Path(__file__).parent / "frontend"), False)])
         websocket_api.async_register_command(hass, get_config)
@@ -22,6 +23,8 @@ async def async_setup_entry(hass, entry):
         websocket_api.async_register_command(hass, get_dmi)
         websocket_api.async_register_command(hass, radar_frames)
         websocket_api.async_register_command(hass, radar_tile)
+        websocket_api.async_register_command(hass, screen_heartbeat)
+        websocket_api.async_register_command(hass, screen_status)
         hass.data[DOMAIN + "_registered"] = True
     if hass.data[DOMAIN]["config"].get("dmiFeed"):
         hass.data[DOMAIN]["alerts"].wis2.start()
@@ -94,3 +97,29 @@ async def radar_tile(hass, connection, msg):
         connection.send_result(msg["id"],await data["radar"].tile(msg["frame"],msg["z"],msg["x"],msg["y"]))
     except Exception:
         connection.send_error(msg["id"],"radar_unavailable","DMI radar tile unavailable")
+
+@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/screen_heartbeat",vol.Required("screen"):vol.Match(r"^[a-zA-Z0-9_-]{1,64}$"),vol.Required("profile"):vol.All(str,vol.Length(max=64)),vol.Required("visible"):bool,vol.Required("revision"):vol.All(int,vol.Range(min=0))})
+@websocket_api.async_response
+async def screen_heartbeat(hass, connection, msg):
+    data=hass.data[DOMAIN]
+    if msg["screen"] not in data["config"].get("screens",{}):
+        connection.send_error(msg["id"],"unknown_screen","Screen not registered")
+        return
+    live=data["screens_live"]
+    live[msg["screen"]]={"last_seen":time.time(),"profile":msg["profile"],"visible":msg["visible"],"revision":msg["revision"]}
+    for key in list(live):
+        if key not in data["config"].get("screens",{}): live.pop(key,None)
+    connection.send_result(msg["id"])
+
+@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/screen_status"})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def screen_status(hass, connection, msg):
+    data=hass.data[DOMAIN]
+    now=time.time()
+    result=[]
+    for key,profile in data["config"].get("screens",{}).items():
+        state=data["screens_live"].get(key,{})
+        age=max(0,now-state["last_seen"]) if state else None
+        result.append({"screen":key,"assigned_profile":profile,**state,"online":age is not None and age<90,"age":age})
+    connection.send_result(msg["id"],result)
