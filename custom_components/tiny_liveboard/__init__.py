@@ -236,7 +236,7 @@ async def camera_media(hass, connection, msg):
         elif msg["action"] == "stop":
             result = await engine.stop(entity)
         elif msg["action"] == "snapshot":
-            result = await engine.snapshot(entity)
+            result = await engine.snapshot(entity, source)
         else:
             result = await engine.start(entity, msg["minutes"], source)
         connection.send_result(msg["id"], result)
