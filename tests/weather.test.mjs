@@ -73,3 +73,7 @@ const {graphSegments}=await import("data:text/javascript;base64,"+Buffer.from(so
 const chartRows=[{datetime:"2026-01-01T00:00:00Z",v:2},{datetime:"2026-01-01T01:00:00Z",v:null},{datetime:"2026-01-01T04:00:00Z",v:2}];
 assert.deepEqual(graphSegments(chartRows,"v"),[[[12,50]],[[588,50]]]);
 assert.equal(graphSegments(chartRows.map(r=>({...r,v:2})),"v")[0][1][0],156);
+
+assert.equal(localAlerts([{expires:"invalid",geometry}],55.2,11).local.length,0);
+assert.equal(localAlerts([{effective:"invalid"}],55.2,11).unknown.length,0);
+assert.equal(advice([{datetime:"2026-01-01T00:00:00Z",temperature:null}],{temperature_unit:"°F"}).find(x=>x[0]==="Bilruder")[1],"Ukendt");
