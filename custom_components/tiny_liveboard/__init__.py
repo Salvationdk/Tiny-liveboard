@@ -20,10 +20,13 @@ async def async_setup_entry(hass, entry):
         websocket_api.async_register_command(hass, get_news)
         websocket_api.async_register_command(hass, get_dmi)
         hass.data[DOMAIN + "_registered"] = True
+    if hass.data[DOMAIN]["config"].get("dmiFeed"):
+        hass.data[DOMAIN]["alerts"].wis2.start()
     frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard", "module_url": "/tiny_liveboard/display.js", "embed_iframe": False, "trust_external": False}}, require_admin=False)
     return True
 
 async def async_unload_entry(hass, entry):
+    await hass.data[DOMAIN]["alerts"].wis2.stop()
     frontend.async_remove_panel(hass, "tiny-liveboard")
     return True
 
@@ -46,6 +49,10 @@ async def save_config(hass, connection, msg):
         await data["store"].async_save(config)
         data["config"] = config
         data["news"].updated.clear()
+        if config.get("dmiFeed"):
+            data["alerts"].wis2.start()
+        else:
+            await data["alerts"].wis2.stop()
         connection.send_result(msg["id"], config)
 
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/news"})
