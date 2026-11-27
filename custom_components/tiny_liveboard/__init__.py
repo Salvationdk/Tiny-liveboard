@@ -5,12 +5,13 @@ from homeassistant.helpers.storage import Store
 import voluptuous as vol
 
 from .news import NewsEngine, settings
+from .alerts import AlertEngine
 
 DOMAIN = "tiny_liveboard"
 
 async def async_setup_entry(hass, entry):
     store = Store(hass, 1, DOMAIN)
-    hass.data[DOMAIN] = {"news": NewsEngine(hass), "store": store, "config": await store.async_load() or {}}
+    hass.data[DOMAIN] = {"news": NewsEngine(hass), "alerts": AlertEngine(hass), "store": store, "config": await store.async_load() or {}}
     if not hass.data.get(DOMAIN + "_registered"):
         await hass.http.async_register_static_paths([StaticPathConfig("/tiny_liveboard", str(Path(__file__).parent / "frontend"), False)])
         websocket_api.async_register_command(hass, get_config)
@@ -54,9 +55,4 @@ async def get_dmi(hass, connection, msg):
     if not data["config"].get("dmiFeed"):
         connection.send_result(msg["id"], {"ok": False, "items": []})
         return
-    engine = data["news"]
-    async with engine.lock:
-        import time
-        if time.monotonic() - engine.updated.get("DMI", -300) >= 300:
-            await engine.fetch("DMI", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-denmark")
-        connection.send_result(msg["id"], {"ok": engine.status.get("DMI", {}).get("ok", False), "items": engine.items.get("DMI", [])})
+    connection.send_result(msg["id"], await data["alerts"].get())
