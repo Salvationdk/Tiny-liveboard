@@ -34,7 +34,24 @@ class MediaEngine:
         name = entity.replace(".", "_") + "_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:8]
         return folder / (name + suffix)
 
-    async def snapshot(self, entity):
+    async def snapshot(self, entity, source=None):
+        if source:
+            ffmpeg = await self.hass.async_add_executor_job(shutil.which, 'ffmpeg')
+            if not ffmpeg:
+                raise ValueError('FFmpeg unavailable')
+            path = await self.hass.async_add_executor_job(self.destination, entity, 'snapshots', '.jpg')
+            proc = await asyncio.create_subprocess_exec(ffmpeg, '-nostdin', '-loglevel', 'error', '-i', source, '-frames:v', '1', str(path), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            try:
+                await asyncio.wait_for(proc.wait(), 20)
+                if proc.returncode:
+                    raise ValueError('Snapshot failed')
+                return {'file': path.name}
+            finally:
+                if proc.returncode is None:
+                    proc.kill()
+                    await proc.wait()
+                if proc.returncode:
+                    await self.hass.async_add_executor_job(lambda: path.unlink(missing_ok=True))
         image = await async_get_image(self.hass, entity)
         suffix = ".png" if image.content_type == "image/png" else ".jpg"
         path = await self.hass.async_add_executor_job(self.destination, entity, "snapshots", suffix)
