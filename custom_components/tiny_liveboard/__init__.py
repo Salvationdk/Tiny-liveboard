@@ -36,9 +36,10 @@ async def save_config(hass, connection, msg):
     data = hass.data[DOMAIN]
     await data["store"].async_save(msg["config"])
     data["config"] = msg["config"]
+    data["news"].updated = 0
     connection.send_result(msg["id"])
 
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/news"})
 @websocket_api.async_response
 async def get_news(hass, connection, msg):
-    connection.send_result(msg["id"], await hass.data[DOMAIN]["news"].get())
+    connection.send_result(msg["id"], await hass.data[DOMAIN]["news"].get(hass.data[DOMAIN]["config"].get("sources")))
