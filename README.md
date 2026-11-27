@@ -24,3 +24,6 @@ Weather completion increment: opt-in OSM raster basemap with home marker and Rai
 Animated SVG weather artwork is shared by current, hourly and daily forecasts; reduced-motion preferences disable icon animation. DMI official warnings remain unverified; consult https://www.dmi.dk/varsler directly.
 
 Forecast refresh tracks hourly and daily successes independently. Failed requests retry after one minute; cached data is explicitly labelled stale after a failure or fifteen minutes without a successful refresh.
+
+### Weather warnings
+Optional Danish MeteoAlarm Atom feed: https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-denmark (EUMETNET / national meteorological service). Updates are cached for five minutes. Polygon geometry is filtered against Home Assistant coordinates when supplied; area-name-only warnings remain geographically unverified. Always consult https://www.dmi.dk/varsler for official guidance. See https://meteoalarm.org/en/live/page/terms-and-conditions for reuse terms. The feed is not a safety-critical notification service.
