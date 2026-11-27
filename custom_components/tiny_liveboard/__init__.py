@@ -7,18 +7,21 @@ import voluptuous as vol
 
 from .news import NewsEngine, settings
 from .alerts import AlertEngine
+from .radar import RadarEngine
 
 DOMAIN = "tiny_liveboard"
 
 async def async_setup_entry(hass, entry):
     store = Store(hass, 1, DOMAIN)
-    hass.data[DOMAIN] = {"news": NewsEngine(hass), "alerts": AlertEngine(hass), "store": store, "save_lock": asyncio.Lock(), "config": await store.async_load() or {}}
+    hass.data[DOMAIN] = {"news": NewsEngine(hass), "alerts": AlertEngine(hass), "radar": RadarEngine(hass), "store": store, "save_lock": asyncio.Lock(), "config": await store.async_load() or {}}
     if not hass.data.get(DOMAIN + "_registered"):
         await hass.http.async_register_static_paths([StaticPathConfig("/tiny_liveboard", str(Path(__file__).parent / "frontend"), False)])
         websocket_api.async_register_command(hass, get_config)
         websocket_api.async_register_command(hass, save_config)
         websocket_api.async_register_command(hass, get_news)
         websocket_api.async_register_command(hass, get_dmi)
+        websocket_api.async_register_command(hass, radar_frames)
+        websocket_api.async_register_command(hass, radar_tile)
         hass.data[DOMAIN + "_registered"] = True
     if hass.data[DOMAIN]["config"].get("dmiFeed"):
         hass.data[DOMAIN]["alerts"].wis2.start()
@@ -71,3 +74,23 @@ async def get_dmi(hass, connection, msg):
         connection.send_result(msg["id"], {"ok": False, "items": []})
         return
     connection.send_result(msg["id"], await data["alerts"].get())
+
+@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/radar_frames"})
+@websocket_api.async_response
+async def radar_frames(hass, connection, msg):
+    try:
+        data=hass.data[DOMAIN]
+        if not data["config"].get("externalRadar"): raise ValueError("Disabled")
+        connection.send_result(msg["id"], await data["radar"].list())
+    except Exception:
+        connection.send_error(msg["id"],"radar_unavailable","DMI radar unavailable")
+
+@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/radar_tile",vol.Required("frame"):str,vol.Required("z"):vol.All(int,vol.Range(min=3,max=9)),vol.Required("x"):vol.All(int,vol.Range(min=0,max=511)),vol.Required("y"):vol.All(int,vol.Range(min=0,max=511))})
+@websocket_api.async_response
+async def radar_tile(hass, connection, msg):
+    try:
+        data=hass.data[DOMAIN]
+        if not data["config"].get("externalRadar"): raise ValueError("Disabled")
+        connection.send_result(msg["id"],await data["radar"].tile(msg["frame"],msg["z"],msg["x"],msg["y"]))
+    except Exception:
+        connection.send_error(msg["id"],"radar_unavailable","DMI radar tile unavailable")
