@@ -1,4 +1,5 @@
 from pathlib import Path
+import asyncio
 from homeassistant.components import frontend, websocket_api
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.helpers.storage import Store
@@ -11,7 +12,7 @@ DOMAIN = "tiny_liveboard"
 
 async def async_setup_entry(hass, entry):
     store = Store(hass, 1, DOMAIN)
-    hass.data[DOMAIN] = {"news": NewsEngine(hass), "alerts": AlertEngine(hass), "store": store, "config": await store.async_load() or {}}
+    hass.data[DOMAIN] = {"news": NewsEngine(hass), "alerts": AlertEngine(hass), "store": store, "save_lock": asyncio.Lock(), "config": await store.async_load() or {}}
     if not hass.data.get(DOMAIN + "_registered"):
         await hass.http.async_register_static_paths([StaticPathConfig("/tiny_liveboard", str(Path(__file__).parent / "frontend"), False)])
         websocket_api.async_register_command(hass, get_config)
@@ -31,15 +32,21 @@ async def async_unload_entry(hass, entry):
 async def get_config(hass, connection, msg):
     connection.send_result(msg["id"], hass.data[DOMAIN]["config"])
 
-@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/save", vol.Required("config"): dict})
+@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/save", vol.Required("config"): dict, vol.Required("expected_revision"): vol.All(int, vol.Range(min=0))})
 @websocket_api.require_admin
 @websocket_api.async_response
 async def save_config(hass, connection, msg):
     data = hass.data[DOMAIN]
-    await data["store"].async_save(msg["config"])
-    data["config"] = msg["config"]
-    data["news"].updated.clear()
-    connection.send_result(msg["id"])
+    async with data["save_lock"]:
+        revision = data["config"].get("_revision", 0)
+        if msg["expected_revision"] != revision:
+            connection.send_error(msg["id"], "conflict", "Configuration changed; reopen Studio")
+            return
+        config = dict(msg["config"], _revision=revision + 1)
+        await data["store"].async_save(config)
+        data["config"] = config
+        data["news"].updated.clear()
+        connection.send_result(msg["id"], config)
 
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/news"})
 @websocket_api.async_response
