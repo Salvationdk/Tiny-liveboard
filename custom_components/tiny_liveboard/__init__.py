@@ -45,8 +45,9 @@ async def save_config(hass, connection, msg):
 @websocket_api.async_response
 async def get_news(hass, connection, msg):
     data = hass.data[DOMAIN]
-    items = await data["news"].get(settings(data["config"]))
-    connection.send_result(msg["id"], {"items": items, "status": data["news"].status})
+    selected = settings(data["config"])
+    items = await data["news"].get(selected)
+    connection.send_result(msg["id"], {"items": items, "status": {name: data["news"].status[name] for name in selected if name in data["news"].status}})
 
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/dmi"})
 @websocket_api.async_response
