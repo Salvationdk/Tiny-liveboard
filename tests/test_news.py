@@ -32,3 +32,15 @@ def test_undated_never_breaking():
     engine = news.NewsEngine(None)
     engine.items = {"DR": [{"title": "Test", "breaking": True, "published": None, "received": 1000}]}
     assert not engine.combined(["DR"], 1100)[0]["breaking"]
+
+
+def test_failed_source_never_breaking():
+    engine = news.NewsEngine(None)
+    engine.items = {"DR": [{"source": "DR", "title": "Test", "breaking": True, "published": 1000, "received": 1000}]}
+    engine.status = {"DR": {"ok": False}}
+    assert not engine.combined(["DR"], 1100)[0]["breaking"]
+
+def test_distinct_unicode_headlines():
+    engine = news.NewsEngine(None)
+    engine.items = {"DR": [{"title": title, "breaking": False, "published": 1000, "received": 1000} for title in ["Ændring i Kalundborg", "Nyhed i Roskilde"]]}
+    assert len(engine.combined(["DR"], 1100)) == 2
