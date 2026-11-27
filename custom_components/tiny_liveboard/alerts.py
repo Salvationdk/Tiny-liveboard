@@ -7,6 +7,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .news import timestamp
 from pathlib import Path
 from .regions import load_regions, resolve_regions
+from .wis2 import WIS2Client
 
 URL = "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-denmark"
 
@@ -39,7 +40,7 @@ def parse_alerts(payload):
         if not title or key in seen:
             continue
         seen.add(key)
-        item = dict(title=title[:500], area=area[:500], severity=get("severity"), effective=get("onset") or get("effective"), expires=get("expires"), description=get("summary")[:2000])
+        item = dict(identifier=get('identifier') or get('id'), title=title[:500], area=area[:500], severity=get("severity"), effective=get("onset") or get("effective"), expires=get("expires"), description=get("summary")[:2000])
         # Preserve source region identifiers; never infer a polygon from a region name.
         geocodes = []
         for code in entry.findall("geocode"):
@@ -117,6 +118,7 @@ class AlertEngine:
         self.success = None
         self.ok = False
         self.items = []
+        self.wis2 = WIS2Client(hass)
 
     async def get(self):
         async with self.lock:
@@ -138,4 +140,9 @@ class AlertEngine:
                 except Exception:
                     self.ok = False
             now = time.time()
-            return {"ok":self.ok,"last_success":self.success,"items":active_alerts(self.items, now)}
+            self.wis2.index.prune(now)
+            live=self.wis2.index.items(now)
+            ids={i["identifier"] for i in live}
+            removed=self.wis2.index.removed
+            fallback=[i for i in self.items if i.get("identifier") not in ids and i.get("identifier") not in removed]
+            return {"ok":self.ok,"last_success":self.success,"wis2_connected":self.wis2.connected,"wis2_last_success":self.wis2.last_success,"items":active_alerts(fallback+live, now)}
