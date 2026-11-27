@@ -24,3 +24,7 @@ assert.equal(second.codec,"video/H264");
 assert.equal(second.jitterMs,12);
 assert.equal(cameraMetrics(report(3000,0),second).bitrate,null);
 assert.equal(cameraMetrics(new Map()),null);
+
+const {fallbackURL}=await import("data:text/javascript;base64,"+Buffer.from(source).toString("base64"));
+assert.equal(fallbackURL("wss://example.org/api/ws?src=front"),"https://example.org/api/stream.mjpeg?src=front");
+assert.throws(()=>fallbackURL("ws://example.org/api/ws"));
