@@ -3,6 +3,7 @@ import asyncio
 import time
 import logging
 import re
+import unicodedata
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from defusedxml import ElementTree
@@ -19,6 +20,7 @@ SOURCES = {
 }
 DEFAULT_SOURCES = list(SOURCES)[:4]
 TTL = 300
+FAILURE_TTL = 60
 BREAKING_TTL = 3600
 MAX_AGE = 48 * 3600
 MAX_BYTES = 1024 * 1024
@@ -68,7 +70,7 @@ class NewsEngine:
         async with self.lock:
             now = time.monotonic()
             await asyncio.gather(*(self.fetch(name, SOURCES[name]) for name in selected
-                                   if now - self.updated.get(name, -TTL) >= TTL))
+                                   if now - self.updated.get(name, -TTL) >= (TTL if self.status.get(name, {}).get("ok", True) else FAILURE_TTL)))
             return self.combined(selected)
 
     def combined(self, selected, now=None):
@@ -84,11 +86,11 @@ class NewsEngine:
                 age = now - (item["published"] or item["received"])
                 if age > MAX_AGE or age < -300:
                     continue
-                key = re.sub(r"[^\\w]+", " ", item["title"].casefold()).strip()
+                key = re.sub(r"[^\w]+", " ", unicodedata.normalize("NFKC", item["title"]).casefold()).strip()
                 if key in seen:
                     continue
                 seen.add(key)
-                result.append(dict(item, breaking=bool(item["breaking"] and item["published"] is not None and 0 <= age <= BREAKING_TTL)))
+                result.append(dict(item, breaking=bool(self.status.get(item["source"], {}).get("ok", True) and item["breaking"] and item["published"] is not None and 0 <= age <= BREAKING_TTL)))
         return sorted(result, key=lambda item: (not item["breaking"], -(item["published"] or item["received"])))[:60]
 
     async def fetch(self, name, url):
@@ -107,7 +109,7 @@ class NewsEngine:
             parsed = await self.hass.async_add_executor_job(parse_feed, bytes(chunks))
             previous = {item["title"]: item["received"] for item in self.items.get(name, [])}
             self.items[name] = [dict(item, source=name, received=previous.get(item["title"], time.time())) for item in parsed]
-            self.status[name] = {"ok": True, "count": len(parsed), "checked": time.time()}
+            self.status[name] = {"ok": True, "count": len(parsed), "checked": time.time(), "last_success": time.time()}
         except Exception as exc:
-            self.status[name] = {"ok": False, "checked": time.time(), "error": type(exc).__name__}
+            self.status[name] = {"ok": False, "checked": time.time(), "error": type(exc).__name__, "last_success": self.status.get(name, {}).get("last_success"), "cached_count": len(self.items.get(name, []))}
             _LOGGER.debug("News source %s unavailable: %s", name, type(exc).__name__)
