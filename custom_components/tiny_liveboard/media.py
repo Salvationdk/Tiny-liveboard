@@ -4,6 +4,7 @@ import shutil
 import time
 import re
 import threading
+from urllib.parse import urlsplit
 from pathlib import Path
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -38,13 +39,13 @@ class MediaEngine:
         await self.hass.async_add_executor_job(path.write_bytes, image.content)
         return {"file": path.name}
 
-    async def start(self, entity, minutes):
+    async def start(self, entity, minutes, source_override=None):
         async with self.lock:
             if entity in self.jobs:
                 raise ValueError("Camera already recording")
             if len(self.jobs) >= 2:
                 raise ValueError("Maximum two recordings")
-            source = await async_get_stream_source(self.hass, entity)
+            source = source_override or await async_get_stream_source(self.hass, entity)
             if not source:
                 raise ValueError("Camera has no server-side stream source")
             ffmpeg = await self.hass.async_add_executor_job(shutil.which, "ffmpeg")
@@ -140,3 +141,33 @@ class MediaEngine:
             else:
                 marker.unlink(missing_ok=True)
             return {"locked": locked}
+
+    async def thumbnail(self, name):
+        if not re.fullmatch(r"[a-zA-Z0-9_]+\.mp4", name):
+            raise ValueError("Invalid recording")
+        source = self.root / "recordings" / name
+        if source.is_symlink() or not source.is_file() or any(p == source for _,p in self.jobs.values()):
+            raise ValueError("Recording unavailable")
+        ffmpeg = await self.hass.async_add_executor_job(shutil.which,"ffmpeg")
+        if not ffmpeg:
+            raise ValueError("FFmpeg unavailable")
+        proc = await asyncio.create_subprocess_exec(ffmpeg,"-nostdin","-loglevel","error","-i",str(source),"-frames:v","1","-vf","scale=320:-2","-f","image2pipe","-vcodec","mjpeg","pipe:1",stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL)
+        try:
+            output,_ = await asyncio.wait_for(proc.communicate(),15)
+            if proc.returncode or not output or len(output)>512*1024:
+                raise ValueError("Thumbnail unavailable")
+            import base64
+            return {"image":"data:image/jpeg;base64,"+base64.b64encode(output).decode("ascii")}
+        finally:
+            if proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+
+def configured_stream(cfg, slot):
+    value = cfg.get("captureRtsp"+str(slot),"")
+    if not value:
+        return None
+    parsed = urlsplit(value)
+    if parsed.scheme not in ("rtsp","rtsps") or not parsed.hostname or len(value)>2048:
+        raise ValueError("Invalid configured RTSP stream")
+    return value
