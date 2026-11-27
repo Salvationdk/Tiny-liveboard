@@ -5,6 +5,9 @@ import io
 import math
 import re
 import time
+import logging
+
+_LOGGER = logging.getLogger(__name__)
 
 API = "https://opendataapi.dmi.dk/v1/radardata"
 FILE = re.compile(r"dk\.com\.\d{12}\.500_max\.h5")
@@ -19,6 +22,7 @@ def decode_tile(raw, z, x, y):
     def string(value):
         return value.decode() if isinstance(value, bytes) else str(value)
     with h5py.File(io.BytesIO(raw),"r") as f:
+        if not isinstance(f.get("where",getlink=True),h5py.HardLink): raise ValueError("Invalid radar metadata")
         where=f["where"].attrs
         proj=CRS.from_user_input(string(where["projdef"]))
         transform=Transformer.from_crs("EPSG:4326",proj,always_xy=True)
@@ -30,6 +34,7 @@ def decode_tile(raw, z, x, y):
             for key in f[name]:
                 if not re.fullmatch(r"data\d+",key) or not isinstance(f[name].get(key,getlink=True),h5py.HardLink): continue
                 group=f[name][key]
+                if not isinstance(group.get("what",getlink=True),h5py.HardLink): continue
                 attrs=group["what"].attrs
                 if string(attrs.get("quantity","")) in ("DBZH","TH","DBZ"):
                     if not isinstance(group.get("data",getlink=True),h5py.HardLink): continue
@@ -85,12 +90,12 @@ class RadarEngine:
     async def list(self):
         from importlib.util import find_spec
         if not all(find_spec(name) is not None for name in ("h5py", "numpy", "pyproj", "PIL")):
-            raise ValueError("Optional DMI radar decoder unavailable")
+            raise ValueError("Radar decoder missing: "+", ".join(name for name in ("h5py","numpy","pyproj","PIL") if find_spec(name) is None))
         import json
         from .news import timestamp
         async with self.lock:
             if time.monotonic()-self.updated>120 or not self.frames:
-                data=json.loads(await self.fetch(API+"/collections/composite/items?scanType=fullRange&sortorder=datetime,DESC&limit=12",1024*1024))
+                data=json.loads(await self.fetch(API+"/collections/composite/items?sortorder=datetime,DESC&limit=12",1024*1024))
                 now=time.time()
                 frames=[]
                 for f in data["features"]:
