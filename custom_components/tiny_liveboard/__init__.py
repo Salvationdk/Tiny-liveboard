@@ -12,6 +12,31 @@ from .radar import RadarEngine
 
 DOMAIN = "tiny_liveboard"
 
+def validate_screen_config(config):
+    import re
+    import json
+    if len(json.dumps(config, allow_nan=False).encode("utf-8")) > 512 * 1024:
+        raise ValueError("Configuration too large")
+    profiles = config.get("profiles", {})
+    screens = config.get("screens", {})
+    schedules = config.get("schedules", [])
+    if not isinstance(profiles, dict) or len(profiles) > 100 or any(not isinstance(k,str) or not 1 <= len(k) <= 64 or not isinstance(v,dict) for k,v in profiles.items()):
+        raise ValueError("Invalid profiles")
+    if not isinstance(screens,dict) or len(screens)>100 or any(not isinstance(k,str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}",k) or not isinstance(v,str) or v not in profiles for k,v in screens.items()):
+        raise ValueError("Invalid screen assignments")
+    if not isinstance(schedules,list) or len(schedules)>100:
+        raise ValueError("Invalid schedules")
+    for rule in schedules:
+        if not isinstance(rule,dict) or not isinstance(rule.get("screen"),str) or rule["screen"] not in screens or not isinstance(rule.get("profile"),str) or rule["profile"] not in profiles:
+            raise ValueError("Unknown scheduled screen or profile")
+        days=rule.get("days")
+        if not isinstance(days,list) or not days or any(type(d) is not int or not 0<=d<=6 for d in days):
+            raise ValueError("Invalid schedule weekdays")
+        start,end=rule.get("start"),rule.get("end")
+        if not all(isinstance(t,str) and re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]",t) for t in (start,end)) or start==end:
+            raise ValueError("Invalid schedule interval")
+    return config
+
 async def async_setup_entry(hass, entry):
     store = Store(hass, 1, DOMAIN)
     hass.data[DOMAIN] = {"news": NewsEngine(hass), "alerts": AlertEngine(hass), "radar": RadarEngine(hass), "store": store, "save_lock": asyncio.Lock(), "screens_live": {}, "config": await store.async_load() or {}}
@@ -52,6 +77,11 @@ async def save_config(hass, connection, msg):
             connection.send_error(msg["id"], "conflict", "Configuration changed; reopen Studio")
             return
         config = dict(msg["config"], _revision=revision + 1)
+        try:
+            validate_screen_config(config)
+        except (ValueError, TypeError, OverflowError) as err:
+            connection.send_error(msg["id"], "invalid_config", str(err))
+            return
         await data["store"].async_save(config)
         data["config"] = config
         data["news"].updated.clear()
