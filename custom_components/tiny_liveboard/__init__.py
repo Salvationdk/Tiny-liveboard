@@ -1,0 +1,36 @@
+from pathlib import Path
+from homeassistant.components import frontend, websocket_api
+from homeassistant.components.http import StaticPathConfig
+from homeassistant.helpers.storage import Store
+import voluptuous as vol
+
+DOMAIN = "tiny_liveboard"
+
+async def async_setup_entry(hass, entry):
+    store = Store(hass, 1, DOMAIN)
+    hass.data[DOMAIN] = {"store": store, "config": await store.async_load() or {}}
+    if not hass.data.get(DOMAIN + "_registered"):
+        await hass.http.async_register_static_paths([StaticPathConfig("/tiny_liveboard", str(Path(__file__).parent / "frontend"), False)])
+        websocket_api.async_register_command(hass, get_config)
+        websocket_api.async_register_command(hass, save_config)
+        hass.data[DOMAIN + "_registered"] = True
+    frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard", "js_url": "/tiny_liveboard/display.js", "embed_iframe": False, "trust_external": False}}, require_admin=False)
+    return True
+
+async def async_unload_entry(hass, entry):
+    frontend.async_remove_panel(hass, "tiny-liveboard")
+    return True
+
+@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/get"})
+@websocket_api.async_response
+async def get_config(hass, connection, msg):
+    connection.send_result(msg["id"], hass.data[DOMAIN]["config"])
+
+@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/save", vol.Required("config"): dict})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def save_config(hass, connection, msg):
+    data = hass.data[DOMAIN]
+    await data["store"].async_save(msg["config"])
+    data["config"] = msg["config"]
+    connection.send_result(msg["id"])
