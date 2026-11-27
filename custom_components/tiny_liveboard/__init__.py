@@ -96,7 +96,7 @@ async def async_setup_entry(hass, entry):
         hass.data[DOMAIN + "_registered"] = True
     if warnings_enabled(hass.data[DOMAIN]["config"]):
         hass.data[DOMAIN]["alerts"].wis2.start()
-    frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard-panel", "module_url": "/tiny_liveboard/display.js?v=0.1.4", "embed_iframe": False, "trust_external": False}}, require_admin=False)
+    frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard-panel", "module_url": "/tiny_liveboard/display.js?v=0.1.5", "embed_iframe": False, "trust_external": False}}, require_admin=False)
     return True
 
 async def async_unload_entry(hass, entry):
@@ -159,8 +159,8 @@ async def radar_frames(hass, connection, msg):
         data=hass.data[DOMAIN]
         if not profile_config(data["config"],msg["profile"]).get("externalRadar"): raise ValueError("Disabled")
         connection.send_result(msg["id"], await data["radar"].list())
-    except Exception:
-        connection.send_error(msg["id"],"radar_unavailable","DMI radar unavailable")
+    except Exception as exc:
+        connection.send_error(msg["id"],"radar_unavailable","DMI radar unavailable: "+str(exc)[:160])
 
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/radar_tile", vol.Optional("profile", default=""): str,vol.Required("frame"):str,vol.Required("z"):vol.All(int,vol.Range(min=3,max=9)),vol.Required("x"):vol.All(int,vol.Range(min=0,max=511)),vol.Required("y"):vol.All(int,vol.Range(min=0,max=511))})
 @websocket_api.async_response
@@ -169,8 +169,8 @@ async def radar_tile(hass, connection, msg):
         data=hass.data[DOMAIN]
         if not profile_config(data["config"],msg["profile"]).get("externalRadar"): raise ValueError("Disabled")
         connection.send_result(msg["id"],await data["radar"].tile(msg["frame"],msg["z"],msg["x"],msg["y"]))
-    except Exception:
-        connection.send_error(msg["id"],"radar_unavailable","DMI radar tile unavailable")
+    except Exception as exc:
+        connection.send_error(msg["id"],"radar_unavailable","DMI radar tile unavailable: "+str(exc)[:160])
 
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/screen_heartbeat",vol.Required("screen"):vol.Match(r"^[a-zA-Z0-9_-]{1,64}$"),vol.Required("profile"):vol.All(str,vol.Length(max=64)),vol.Required("visible"):bool,vol.Required("revision"):vol.All(int,vol.Range(min=0))})
 @websocket_api.async_response
