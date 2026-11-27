@@ -68,3 +68,8 @@ assert.equal(recommendation(activityRows.slice(0,2),"Vasketøj"),"Usikkert tørr
 assert.equal(recommendation([activityRows[0],activityRows[2]],"Gåtur"),"Intet sikkert vindue fundet");
 assert.equal(recommendation(activityRows.map(r=>({...r,condition:"lightning"})),"Gåtur"),"Intet sikkert vindue fundet");
 assert.match(recommendation(activityRows.map(r=>({...r,precipitation_probability:80})),"Nedbør"),/Nedbørsrisiko/);
+
+const {graphSegments}=await import("data:text/javascript;base64,"+Buffer.from(source).toString("base64"));
+const chartRows=[{datetime:"2026-01-01T00:00:00Z",v:2},{datetime:"2026-01-01T01:00:00Z",v:null},{datetime:"2026-01-01T04:00:00Z",v:2}];
+assert.deepEqual(graphSegments(chartRows,"v"),[[[12,50]],[[588,50]]]);
+assert.equal(graphSegments(chartRows.map(r=>({...r,v:2})),"v")[0][1][0],156);
