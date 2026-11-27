@@ -20,3 +20,5 @@ Weather extensions: approximate lunar phase, forecast-based everyday advice, rai
 Weather visual polish: scalable SVG weather artwork, translucent forecast surfaces, compact screen rules, and opt-in RainViewer historical radar tile playback. Radar is a regional tile without a geographic basemap; external availability, terms and browser CORS must be verified. No coordinates are sent unless external radar is enabled and opened. Official DMI warnings still require a configured HA sensor.
 
 Weather completion increment: opt-in OSM raster basemap with home marker and RainViewer overlay; local forecast wind direction timeline; approximate NOAA-style solar calculations; experimental DMI RSS adapter (endpoint not verified, no claim of warning coverage). Geographic wind field still requires a camera provider. External map services receive tile coordinates only when enabled. Verify provider terms before production deployment.
+
+Animated SVG weather artwork is shared by current, hourly and daily forecasts; reduced-motion preferences disable icon animation. DMI official warnings remain unverified; consult https://www.dmi.dk/varsler directly.
