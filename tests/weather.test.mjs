@@ -29,3 +29,14 @@ const {localAlerts}=await import("data:text/javascript;base64,"+Buffer.from(sour
 const alerts=localAlerts([{title:"Local",bounds:[55,10,56,12]},{title:"Other",bounds:[57,10,58,12]},{title:"Unknown"},{title:"Expired",bounds:[55,10,56,12],expires:"2020-01-01"}],55.7,11.1,Date.parse("2026-01-01"));
 assert.deepEqual(alerts.local.map(a=>a.title),["Local"]);
 assert.deepEqual(alerts.unknown.map(a=>a.title),["Unknown"]);
+
+const {alertGeometry}=await import("data:text/javascript;base64,"+Buffer.from(source).toString("base64"));
+const outer=[[10,55],[12,55],[12,57],[10,57],[10,55]],hole=[[10.5,55.5],[11.5,55.5],[11.5,56.5],[10.5,56.5],[10.5,55.5]];
+const geometry={type:"Polygon",coordinates:[outer,hole]};
+assert.equal(alertGeometry(geometry,55.2,11),true);
+assert.equal(alertGeometry(geometry,56,11),false);
+assert.equal(alertGeometry(geometry,55,11),true);
+assert.equal(alertGeometry(geometry,58,11),false);
+assert.equal(alertGeometry({type:"MultiPolygon",coordinates:[[outer]]},56,11),true);
+assert.equal(alertGeometry({type:"Polygon",coordinates:[[]]},56,11),null);
+assert.equal(localAlerts([{geometry}],55.2,11).local.length,1);
