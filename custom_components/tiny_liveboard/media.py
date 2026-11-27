@@ -3,6 +3,7 @@ import asyncio
 import shutil
 import time
 import re
+import threading
 from pathlib import Path
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -15,6 +16,7 @@ class MediaEngine:
         self.root = Path("/media/tiny_liveboard")
         self.jobs = {}
         self.started = {}
+        self.file_lock = threading.RLock()
         self.lock = asyncio.Lock()
 
     def destination(self, entity, kind, suffix):
@@ -89,10 +91,14 @@ class MediaEngine:
                 if path.is_symlink() or not path.is_file() or path.suffix not in (".jpg", ".png", ".mp4") or path.name in active:
                     continue
                 stat = path.stat()
-                result.append({"kind": kind, "file": path.name, "size": stat.st_size, "modified": stat.st_mtime})
+                result.append({"kind": kind, "file": path.name, "size": stat.st_size, "modified": stat.st_mtime, "locked": path.with_suffix(path.suffix + ".lock").is_file()})
         return {"items": sorted(result, key=lambda x: x["modified"], reverse=True)[:500], "bytes": sum(x["size"] for x in result)}
 
     def delete_file(self, kind, name):
+        with self.file_lock:
+            self._delete_file(kind, name)
+
+    def _delete_file(self, kind, name):
         if kind not in ("snapshots", "recordings") or not re.fullmatch(r"[a-zA-Z0-9_]+\.(jpg|png|mp4)", name):
             raise ValueError("Invalid media file")
         if any(path.name == name for _, path in self.jobs.values()):
@@ -100,13 +106,32 @@ class MediaEngine:
         path = self.root / kind / name
         if path.is_symlink() or not path.is_file():
             raise ValueError("Media unavailable")
+        if path.with_suffix(path.suffix + ".lock").exists():
+            raise ValueError("Media is locked")
         path.unlink()
 
     def cleanup(self, days):
         cutoff = time.time() - days * 86400
         count = 0
         for item in self.list_files()["items"]:
-            if item["modified"] < cutoff:
-                self.delete_file(item["kind"], item["file"])
-                count += 1
+            if item["modified"] < cutoff and not item["locked"]:
+                try:
+                    self.delete_file(item["kind"], item["file"])
+                    count += 1
+                except (ValueError, FileNotFoundError):
+                    continue
         return count
+
+    def set_locked(self, kind, name, locked):
+        with self.file_lock:
+            if kind not in ("snapshots", "recordings") or not re.fullmatch(r"[a-zA-Z0-9_]+\.(jpg|png|mp4)", name):
+                raise ValueError("Invalid media file")
+            path = self.root / kind / name
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("Media unavailable")
+            marker = path.with_suffix(path.suffix + ".lock")
+            if locked:
+                marker.touch(exist_ok=True)
+            else:
+                marker.unlink(missing_ok=True)
+            return {"locked": locked}
