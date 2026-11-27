@@ -6,3 +6,7 @@ assert.equal(forecastRows([{datetime:"bad"},{datetime:"2026-01-01T00:00:00Z"}],D
 assert.deepEqual(graphPoints([{temperature:null}],"temperature"),[]);
 assert.equal(graphPoints([{temperature:0},{temperature:5}],"temperature").length,2);
 assert.ok(graphPoints([{temperature:0}],"temperature").flat().every(Number.isFinite));
+
+const {moon,advice}=await import("data:text/javascript;base64,"+Buffer.from(source).toString("base64"));
+assert.equal(moon(new Date("2000-01-06T18:14:00Z")).phase,"Nymåne");
+assert.equal(advice([],{}).find(x=>x[0]==="Bilruder")[1],"Ukendt");

@@ -14,3 +14,5 @@ Enter the existing server's HTTP(S) base address in Studio, click discovery and 
 
 ### Tiny Weather Engine
 Native animated weather panel with hourly/daily forecasts via Home Assistant weather.get_forecasts, temperature and precipitation graphs, wind and sun tabs. Missing data are not fabricated. Radar, official alerts, independent moon calculations and weather intelligence remain pending. Provider support varies.
+
+Weather extensions: approximate lunar phase, forecast-based everyday advice, rain/snow scenes and themes, selectable HA camera entities for radar/wind imagery and sensor entities for warnings/pollen. These are adapters, not independent radar or official warning providers; animated radar timelines and geographic wind maps require a suitable provider. Advice is not a safety guarantee.
