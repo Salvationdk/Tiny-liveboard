@@ -1,1 +1,18 @@
-{"config":{"step":{"user":{"title":"Tiny LiveBoard","description":"Installer skærm og editor."}},"abort":{"single_instance_allowed":"Allerede konfigureret"}}}
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Tiny LiveBoard",
+        "description": "Vælg eksisterende Home Assistant-enheder. Øvrige indstillinger findes i Studio.",
+        "data": {
+          "camera0": "Kamera 1",
+          "camera1": "Kamera 2",
+          "weather": "Vejr"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Allerede konfigureret"
+    }
+  }
+}
