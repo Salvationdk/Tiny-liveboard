@@ -22,3 +22,5 @@ Weather visual polish: scalable SVG weather artwork, translucent forecast surfac
 Weather completion increment: opt-in OSM raster basemap with home marker and RainViewer overlay; local forecast wind direction timeline; approximate NOAA-style solar calculations; experimental DMI RSS adapter (endpoint not verified, no claim of warning coverage). Geographic wind field still requires a camera provider. External map services receive tile coordinates only when enabled. Verify provider terms before production deployment.
 
 Animated SVG weather artwork is shared by current, hourly and daily forecasts; reduced-motion preferences disable icon animation. DMI official warnings remain unverified; consult https://www.dmi.dk/varsler directly.
+
+Forecast refresh tracks hourly and daily successes independently. Failed requests retry after one minute; cached data is explicitly labelled stale after a failure or fifteen minutes without a successful refresh.
