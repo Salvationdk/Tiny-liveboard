@@ -4,6 +4,7 @@ import shutil
 import time
 import re
 import threading
+import tempfile
 from urllib.parse import urlsplit
 from pathlib import Path
 from datetime import datetime, timezone
@@ -20,6 +21,7 @@ class MediaEngine:
         self.hass = hass
         self.root = Path("/media/tiny_liveboard")
         self.jobs = {}
+        self.buffers = {}
         self.started = {}
         self.file_lock = threading.RLock()
         self.lock = asyncio.Lock()
@@ -54,6 +56,7 @@ class MediaEngine:
             path = await self.hass.async_add_executor_job(self.destination, entity, "recordings", ".mp4")
             proc = await asyncio.create_subprocess_exec(ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", source, "-map", "0:v:0", "-c:v", "copy", "-an", "-t", str(minutes*60), "-fs", str(512*1024**2), "-movflags", "+frag_keyframe+empty_moov", str(path), stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
             self.jobs[entity] = (proc, path)
+            await self.save_preroll(entity, path)
             self.started[entity] = time.monotonic()
             self.hass.async_create_task(self.watch(entity, proc, path))
             return {"recording": True, "file": path.name}
@@ -83,6 +86,8 @@ class MediaEngine:
             return {"recording": False, "file": path.name}
 
     async def close(self):
+        for entity in list(self.buffers):
+            await self.stop_buffer(entity)
         for entity in list(self.jobs):
             await self.stop(entity)
 
@@ -141,6 +146,66 @@ class MediaEngine:
             else:
                 marker.unlink(missing_ok=True)
             return {"locked": locked}
+
+    async def start_buffer(self, entity, seconds):
+        await self.stop_buffer(entity)
+        if not seconds:
+            return
+        source = await async_get_stream_source(self.hass, entity)
+        ffmpeg = await self.hass.async_add_executor_job(shutil.which, "ffmpeg")
+        if not source or not ffmpeg:
+            raise ValueError("Buffer source unavailable")
+        folder = tempfile.TemporaryDirectory(prefix="tiny-motion-")
+        try:
+            proc = await asyncio.create_subprocess_exec(ffmpeg,"-nostdin","-loglevel","error","-i",source,"-map","0:v:0","-an","-vf","scale=640:-2","-c:v","libx264","-preset","ultrafast","-b:v","600k","-maxrate","800k","-bufsize","800k","-force_key_frames","expr:gte(t,n_forced*2)","-f","hls","-hls_time","2","-hls_list_size",str((seconds+1)//2),"-hls_flags","delete_segments+omit_endlist","-hls_segment_filename",folder.name+"/part%09d.ts",folder.name+"/index.m3u8",stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.DEVNULL)
+        except BaseException:
+            folder.cleanup()
+            raise
+        self.buffers[entity]=(proc,folder,seconds)
+
+    async def stop_buffer(self, entity):
+        job=self.buffers.pop(entity,None)
+        if not job:
+            return
+        proc,folder,_=job
+        if proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
+        await self.hass.async_add_executor_job(folder.cleanup)
+
+    async def save_preroll(self, entity, recording):
+        job=self.buffers.get(entity)
+        if not job:
+            return
+        proc,folder,seconds=job
+        if proc.returncode is not None:
+            return
+        def collect():
+            root=Path(folder.name)
+            try:
+                names=[line.strip() for line in (root/"index.m3u8").read_text().splitlines() if re.fullmatch(r"part[0-9]+\.ts",line.strip())]
+                return b"".join((root/name).read_bytes() for name in names[-((seconds+1)//2):])
+            except OSError:
+                return b""
+        data=await self.hass.async_add_executor_job(collect)
+        if not data or len(data)>16*1024**2:
+            return
+        ffmpeg=await self.hass.async_add_executor_job(shutil.which,"ffmpeg")
+        if not ffmpeg:
+            return
+        target=recording.with_name(recording.stem+"_pre.mp4")
+        worker=await asyncio.create_subprocess_exec(ffmpeg,"-nostdin","-loglevel","error","-f","mpegts","-i","pipe:0","-c","copy","-movflags","+faststart",str(target),stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.DEVNULL)
+        try:
+            await asyncio.wait_for(worker.communicate(data),15)
+        finally:
+            if worker.returncode is None:
+                worker.kill()
+                await worker.wait()
+            if worker.returncode:
+                await self.hass.async_add_executor_job(lambda:target.unlink(missing_ok=True))
 
     async def thumbnail(self, name):
         if not re.fullmatch(r"[a-zA-Z0-9_]+\.mp4", name):
