@@ -127,11 +127,13 @@ async def save_config(hass, connection, msg):
             await data["alerts"].wis2.stop()
         connection.send_result(msg["id"], config)
 
-@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/news"})
+@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/news", vol.Optional("profile", default=""): str})
 @websocket_api.async_response
 async def get_news(hass, connection, msg):
     data = hass.data[DOMAIN]
-    selected = settings(data["config"])
+    config = data["config"]
+    profile = config.get("profiles", {}).get(msg["profile"], {})
+    selected = settings({**config, **profile})
     items = await data["news"].get(selected)
     connection.send_result(msg["id"], {"items": items, "status": {name: data["news"].status[name] for name in selected if name in data["news"].status}})
 
