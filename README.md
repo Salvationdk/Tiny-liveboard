@@ -11,3 +11,6 @@ RSS/Atom, independent five-minute fetch caches, 48-hour article retention, one-h
 
 ### Existing go2rtc
 Enter the existing server's HTTP(S) base address in Studio, click discovery and select named streams. Browser discovery requires reachable API and CORS permission; HTTPS panels require HTTPS/WSS. Preview each stream before saving. No go2rtc configuration is changed. Manual WebSocket URL remains an alternative. Direct peer connectivity and browser codec support must be tested on the target display.
+
+### Tiny Weather Engine
+Native animated weather panel with hourly/daily forecasts via Home Assistant weather.get_forecasts, temperature and precipitation graphs, wind and sun tabs. Missing data are not fabricated. Radar, official alerts, independent moon calculations and weather intelligence remain pending. Provider support varies.
