@@ -5,6 +5,8 @@ import time
 import re
 import threading
 import tempfile
+import logging
+_LOGGER = logging.getLogger(__name__)
 from urllib.parse import urlsplit
 from pathlib import Path
 from datetime import datetime, timezone
@@ -23,6 +25,7 @@ class MediaEngine:
         self.jobs = {}
         self.buffers = {}
         self.started = {}
+        self.finalizing = set()
         self.file_lock = threading.RLock()
         self.lock = asyncio.Lock()
 
@@ -73,7 +76,10 @@ class MediaEngine:
             path = await self.hass.async_add_executor_job(self.destination, entity, "recordings", ".mp4")
             proc = await asyncio.create_subprocess_exec(ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", source, "-map", "0:v:0", "-c:v", "copy", "-an", "-t", str(minutes*60), "-fs", str(512*1024**2), "-movflags", "+frag_keyframe+empty_moov", str(path), stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
             self.jobs[entity] = (proc, path)
-            await self.save_preroll(entity, path)
+            try:
+                await self.save_preroll(entity, path)
+            except Exception:
+                _LOGGER.warning('Pre-recording export failed; keeping main recording', exc_info=True)
             self.started[entity] = time.monotonic()
             self.hass.async_create_task(self.watch(entity, proc, path))
             return {"recording": True, "file": path.name}
@@ -82,6 +88,7 @@ class MediaEngine:
         await proc.wait()
         async with self.lock:
             if self.jobs.get(entity, (None,))[0] is proc:
+                await self.merge_preroll(path)
                 self.jobs.pop(entity, None)
                 self.started.pop(entity, None)
 
@@ -98,6 +105,7 @@ class MediaEngine:
                 except asyncio.TimeoutError:
                     proc.kill()
                     await proc.wait()
+            await self.merge_preroll(path)
             self.jobs.pop(entity, None)
             self.started.pop(entity, None)
             return {"recording": False, "file": path.name}
@@ -110,6 +118,8 @@ class MediaEngine:
 
     def list_files(self):
         active = {path.name for _, path in self.jobs.values()}
+        active |= {Path(name).stem+'_pre.mp4' for name in active}
+        active |= self.finalizing
         result = []
         for kind in ("snapshots", "recordings"):
             folder = self.root / kind
@@ -129,7 +139,7 @@ class MediaEngine:
     def _delete_file(self, kind, name):
         if kind not in ("snapshots", "recordings") or not re.fullmatch(r"[a-zA-Z0-9_]+\.(jpg|png|mp4)", name):
             raise ValueError("Invalid media file")
-        if any(path.name == name for _, path in self.jobs.values()):
+        if name in self.finalizing or any(name in (path.name,path.stem+'_pre.mp4') for _, path in self.jobs.values()):
             raise ValueError("Recording active")
         path = self.root / kind / name
         if path.is_symlink() or not path.is_file():
@@ -223,6 +233,44 @@ class MediaEngine:
                 await worker.wait()
             if worker.returncode:
                 await self.hass.async_add_executor_job(lambda:target.unlink(missing_ok=True))
+
+    async def merge_preroll(self, path):
+        pre = path.with_name(path.stem+"_pre.mp4")
+        tmp = path.with_name(path.stem+"_merge.tmp")
+        self.finalizing.update((path.name,pre.name))
+        worker = None
+        try:
+            def ready():
+                return all(p.is_file() and not p.is_symlink() and p.stat().st_size > 0 for p in (pre,path)) and shutil.disk_usage(path.parent).free > 512*1024**2 and not any(p.with_suffix(p.suffix+".lock").exists() for p in (pre,path))
+            if not await self.hass.async_add_executor_job(ready):
+                return
+            ffmpeg = await self.hass.async_add_executor_job(shutil.which,"ffmpeg")
+            if not ffmpeg:
+                return
+            # Normalize dimensions, sample aspect ratio, frame rate and timestamps.
+            graph = "[0:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=25,setpts=PTS-STARTPTS[a];[1:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=25,setpts=PTS-STARTPTS[b];[a][b]concat=n=2:v=1:a=0[out]"
+            worker = await asyncio.create_subprocess_exec(ffmpeg,"-nostdin","-loglevel","error","-y","-i",str(pre),"-i",str(path),"-filter_complex",graph,"-map","[out]","-c:v","libx264","-preset","ultrafast","-crf","23","-threads","2","-pix_fmt","yuv420p","-movflags","+faststart","-f","mp4",str(tmp),stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.DEVNULL)
+            await asyncio.wait_for(worker.wait(),900)
+            if worker.returncode:
+                raise ValueError("FFmpeg merge failed")
+            def commit():
+                with self.file_lock:
+                    if not tmp.is_file() or tmp.stat().st_size == 0 or any(p.with_suffix(p.suffix+".lock").exists() for p in (pre,path)):
+                        return
+                    tmp.replace(path)
+                    pre.unlink(missing_ok=True)
+            await self.hass.async_add_executor_job(commit)
+        except Exception:
+            _LOGGER.warning("Recording merge failed; retaining original clips",exc_info=True)
+        finally:
+            if worker is not None and worker.returncode is None:
+                try:
+                    worker.kill()
+                except ProcessLookupError:
+                    pass
+                await worker.wait()
+            await self.hass.async_add_executor_job(lambda:tmp.unlink(missing_ok=True))
+            self.finalizing.difference_update((path.name,pre.name))
 
     async def thumbnail(self, name):
         if not re.fullmatch(r"[a-zA-Z0-9_]+\.mp4", name):
