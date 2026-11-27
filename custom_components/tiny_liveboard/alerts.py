@@ -15,10 +15,18 @@ def parse_alerts(payload):
         node.tag = node.tag.rsplit("}", 1)[-1]
     result = []
     seen = set()
-    for entry in root.findall("entry"):
+    entries = root.findall("entry")
+    if len(entries) > 500:
+        raise ValueError("Too many alerts")
+    recognized = 0
+    for entry in entries:
         def get(key):
             return (entry.findtext(key) or "").strip()
-        if get("status").lower() != "actual" or get("message_type").lower() not in ("alert", "update"):
+        status = get("status").lower()
+        message_type = (get("message_type") or get("msgType")).lower()
+        if status and message_type:
+            recognized += 1
+        if status != "actual" or message_type not in ("alert", "update"):
             continue
         if get("scope").lower() != "public":
             continue
@@ -30,16 +38,21 @@ def parse_alerts(payload):
         seen.add(key)
         item = dict(title=title[:500], area=area[:500], severity=get("severity"), effective=get("onset") or get("effective"), expires=get("expires"), description=get("summary")[:2000])
         polygons = []
+        invalid_geometry = False
         for p in entry.findall("polygon"):
             try:
                 ring = [list(reversed([float(v) for v in pair.split(",")])) for pair in (p.text or "").split()]
-                if len(ring)>=4 and ring[0]==ring[-1] and all(len(v)==2 and abs(v[0])<=180 and abs(v[1])<=90 for v in ring):
+                if 4<=len(ring)<=5000 and ring[0]==ring[-1] and all(len(v)==2 and abs(v[0])<=180 and abs(v[1])<=90 for v in ring):
                     polygons.append([ring])
+                else:
+                    invalid_geometry = True
             except ValueError:
-                continue
-        if polygons:
+                invalid_geometry = True
+        if polygons and not invalid_geometry:
             item["geometry"] = {"type":"MultiPolygon","coordinates":polygons}
         result.append(item)
+    if entries and not recognized:
+        raise ValueError("Unrecognized warning format")
     return result
 
 class AlertEngine:
