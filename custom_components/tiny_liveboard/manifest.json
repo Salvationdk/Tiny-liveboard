@@ -1,7 +1,7 @@
 {
   "domain": "tiny_liveboard",
   "name": "Tiny LiveBoard",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "documentation": "https://github.com/Salvationdk/Tiny-liveboard",
   "issue_tracker": "https://github.com/Salvationdk/Tiny-liveboard/issues",
   "codeowners": [
@@ -14,8 +14,5 @@
     "frontend",
     "http"
   ],
-  "requirements": [
-    "h5py==3.14.0",
-    "pyproj==3.7.2"
-  ]
+  "requirements": []
 }
