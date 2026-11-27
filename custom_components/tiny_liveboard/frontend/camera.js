@@ -5,7 +5,7 @@ export function cameraLayout(w,h,ratios,g=8){
  return {width,cameras:heights.map((height,i)=>({width,height,top:top+(i?heights[0]+g:0)}))};
 }
 export class CameraEngine {
- constructor(element,url,onResize){this.video=element.querySelector("video");this.status=element.querySelector(".camera-status");this.url=url;this.onResize=onResize;this.ratio=16/9;this.closed=false;this.delay=1000;this.video.onresize=()=>{if(this.video.videoWidth&&this.video.videoHeight){this.ratio=this.video.videoWidth/this.video.videoHeight;this.onResize()}}}
+ constructor(element,url,onResize){this.video=element.querySelector("video");this.status=element.querySelector(".camera-status");this.url=url;this.onResize=onResize;this.ratio=16/9;this.closed=false;this.delay=1000;this.lastFrame=0;this.watch=setInterval(()=>{if(this.closed||!this.pc)return;const t=this.video.currentTime;if(this.pc.connectionState==="connected"&&t===this.lastFrame&&this.video.readyState>=2){if(++this.stalls>=3)this.retry(this.pc)}else this.stalls=0;this.lastFrame=t},5000);this.stalls=0;this.video.onresize=()=>{if(this.video.videoWidth&&this.video.videoHeight){this.ratio=this.video.videoWidth/this.video.videoHeight;this.onResize()}}}
  connect(){
   if(this.closed)return;
   if(!this.url){this.status.textContent="Konfigurer go2rtc i Studio";return}
@@ -18,7 +18,7 @@ export class CameraEngine {
    pc.ontrack=e=>{if(this.pc!==pc)return;this.video.srcObject=e.streams[0]||new MediaStream([e.track]);this.video.play().catch(()=>{});this.status.textContent="LIVE";this.delay=1000};
    pc.onicecandidate=e=>{if(e.candidate)send("webrtc/candidate",e.candidate.candidate)};
    pc.onconnectionstatechange=()=>{if(["failed","disconnected"].includes(pc.connectionState))this.retry(pc)};
-   ws.onopen=async()=>{try{const offer=await pc.createOffer();await pc.setLocalDescription(offer);send("webrtc/offer",offer.sdp)}catch{this.retry(pc)}};
+   ws.onopen=async()=>{try{const offer=await pc.createOffer();await pc.setLocalDescription(offer);send("webrtc/offer",pc.localDescription.sdp)}catch{this.retry(pc)}};
    ws.onmessage=async e=>{try{const msg=JSON.parse(e.data);if(msg.type==="webrtc/answer"){await pc.setRemoteDescription({type:"answer",sdp:msg.value});remote=true;for(const c of candidates)await pc.addIceCandidate(c);candidates=[]}else if(msg.type==="webrtc/candidate"&&msg.value){const c={candidate:msg.value,sdpMid:"0"};if(remote)await pc.addIceCandidate(c);else candidates.push(c)}else if(msg.type==="error")this.retry(pc)}catch{this.retry(pc)}};
    ws.onerror=()=>this.retry(pc);ws.onclose=()=>{if(pc.connectionState!=="connected")this.retry(pc)};
    this.timeout=setTimeout(()=>{if(pc.connectionState!=="connected")this.retry(pc)},15000);
@@ -26,5 +26,25 @@ export class CameraEngine {
  }
  retry(pc){if(this.closed||this.pc!==pc||this.retryTimer)return;this.status.textContent="Genopretter forbindelse…";this.retryTimer=setTimeout(()=>{this.retryTimer=null;this.cleanup();this.connect()},this.delay);this.delay=Math.min(this.delay*2,30000)}
  cleanup(){clearTimeout(this.timeout);const ws=this.ws,pc=this.pc;this.ws=null;this.pc=null;if(ws){ws.onclose=null;ws.onerror=null;ws.close()}if(pc){pc.onconnectionstatechange=null;pc.close()}this.video.srcObject=null}
- close(){this.closed=true;clearTimeout(this.retryTimer);this.cleanup();this.video.onresize=null}
+ close(){this.closed=true;clearInterval(this.watch);clearTimeout(this.retryTimer);this.cleanup();this.video.onresize=null}
+}
+
+export function streamURL(base,name){
+ const url=new URL(base);
+ if(!["http:","https:"].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw new Error("Invalid go2rtc base URL");
+ url.pathname=url.pathname.replace(/\/$/,"")+"/api/ws";
+ url.protocol=url.protocol==="https:"?"wss:":"ws:";
+ url.searchParams.set("src",name);
+ return url.href;
+}
+export async function discoverStreams(base,fetcher=fetch){
+ const url=new URL(streamURL(base,""));
+ url.protocol=url.protocol==="wss:"?"https:":"http:";
+ url.pathname=url.pathname.replace(/\/ws$/,"/streams");
+ url.search="";
+ const response=await fetcher(url.href,{signal:AbortSignal.timeout(10000),credentials:"omit",redirect:"error"});
+ if(!response.ok)throw new Error("HTTP "+response.status);
+ const data=await response.json();
+ if(!data||Array.isArray(data)||typeof data!=="object")throw new Error("Invalid stream list");
+ return Object.keys(data).sort((a,b)=>a.localeCompare(b));
 }
