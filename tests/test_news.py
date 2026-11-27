@@ -44,3 +44,24 @@ def test_distinct_unicode_headlines():
     engine = news.NewsEngine(None)
     engine.items = {"DR": [{"title": title, "breaking": False, "published": 1000, "received": 1000} for title in ["Ændring i Kalundborg", "Nyhed i Roskilde"]]}
     assert len(engine.combined(["DR"], 1100)) == 2
+
+
+def test_invalid_feed_rejected():
+    import pytest
+    for payload in (b"<html/>", b"<rss/>"):
+        with pytest.raises(ValueError):
+            news.parse_feed(payload)
+    assert news.parse_feed(b"<rss><channel/></rss>") == []
+
+
+def test_epoch_timestamp_not_replaced_by_receipt():
+    engine = news.NewsEngine(None)
+    engine.items = {"DR": [{"title": "Old", "breaking": True, "published": 0, "received": 200000}]}
+    assert engine.combined(["DR"], 200000) == []
+
+
+def test_failed_source_without_embedded_name():
+    engine = news.NewsEngine(None)
+    engine.items = {"DR": [{"title": "Test", "breaking": True, "published": 1000, "received": 1000}]}
+    engine.status = {"DR": {"ok": False}}
+    assert not engine.combined(["DR"], 1100)[0]["breaking"]
