@@ -90,7 +90,7 @@ class NewsEngine:
                 if key in seen:
                     continue
                 seen.add(key)
-                result.append(dict(item, breaking=bool(self.status.get(item["source"], {}).get("ok", True) and item["breaking"] and item["published"] is not None and 0 <= age <= BREAKING_TTL)))
+                result.append(dict(item, breaking=bool(self.status.get(item.get("source"), {}).get("ok", True) and item["breaking"] and item["published"] is not None and 0 <= age <= BREAKING_TTL)))
         return sorted(result, key=lambda item: (not item["breaking"], -(item["published"] or item["received"])))[:60]
 
     async def fetch(self, name, url):
