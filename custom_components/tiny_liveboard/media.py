@@ -116,7 +116,7 @@ class MediaEngine:
         for entity in list(self.jobs):
             await self.stop(entity)
 
-    def list_files(self):
+    def list_files(self, limit=500):
         active = {path.name for _, path in self.jobs.values()}
         active |= {Path(name).stem+'_pre.mp4' for name in active}
         active |= self.finalizing
@@ -130,7 +130,7 @@ class MediaEngine:
                     continue
                 stat = path.stat()
                 result.append({"kind": kind, "file": path.name, "size": stat.st_size, "modified": stat.st_mtime, "locked": path.with_suffix(path.suffix + ".lock").is_file()})
-        return {"items": sorted(result, key=lambda x: x["modified"], reverse=True)[:500], "bytes": sum(x["size"] for x in result)}
+        return {"items": sorted(result, key=lambda x: x["modified"], reverse=True)[:limit], "bytes": sum(x["size"] for x in result)}
 
     def delete_file(self, kind, name):
         with self.file_lock:
@@ -151,7 +151,7 @@ class MediaEngine:
     def cleanup(self, days):
         cutoff = time.time() - days * 86400
         count = 0
-        for item in self.list_files()["items"]:
+        for item in self.list_files(None)["items"]:
             if item["modified"] < cutoff and not item["locked"]:
                 try:
                     self.delete_file(item["kind"], item["file"])
