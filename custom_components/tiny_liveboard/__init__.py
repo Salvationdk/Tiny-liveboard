@@ -99,6 +99,7 @@ async def async_setup_entry(hass, entry):
         websocket_api.async_register_command(hass, motion_history)
         websocket_api.async_register_command(hass, save_config)
         websocket_api.async_register_command(hass, get_news)
+        websocket_api.async_register_command(hass, news_archive)
         websocket_api.async_register_command(hass, get_dmi)
         websocket_api.async_register_command(hass, radar_frames)
         websocket_api.async_register_command(hass, radar_tile)
@@ -153,6 +154,35 @@ async def save_config(hass, connection, msg):
         else:
             await data["alerts"].wis2.stop()
         connection.send_result(msg["id"], config)
+
+@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/news_archive", vol.Required("action"): vol.In(["list","save","delete"]), vol.Optional("url", default=""): str})
+@websocket_api.async_response
+async def news_archive(hass, connection, msg):
+    import hashlib
+    uid = connection.user.id
+    data = hass.data[DOMAIN]
+    async with data["save_lock"]:
+        store = Store(hass, 1, DOMAIN + ".news_archive")
+        archive = await store.async_load() or {}
+        entries = archive.get(uid, [])
+        url = msg["url"]
+        key = hashlib.sha256(url.encode()).hexdigest()
+        if msg["action"] == "save":
+            item = next((x for group in data["news"].items.values() for x in group if x.get("url") and x["url"] == url), None)
+            if item is None:
+                connection.send_error(msg["id"], "not_found", "Article is no longer in feed cache")
+                return
+            if not any(x["id"] == key for x in entries):
+                if len(entries) >= 500:
+                    connection.send_error(msg["id"], "limit", "Archive limit reached (500)")
+                    return
+                entries.insert(0, {**item, "id": key, "saved": time.time()})
+        elif msg["action"] == "delete":
+            entries = [x for x in entries if x["id"] != key]
+        if msg["action"] != "list":
+            archive[uid] = entries
+            await store.async_save(archive)
+        connection.send_result(msg["id"], {"items": entries})
 
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/news", vol.Optional("profile", default=""): str})
 @websocket_api.async_response
