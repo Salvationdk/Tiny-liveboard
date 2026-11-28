@@ -56,6 +56,14 @@ def validate_screen_config(config):
     import json
     if len(json.dumps(config, allow_nan=False).encode("utf-8")) > 512 * 1024:
         raise ValueError("Configuration too large")
+    themes = config.get("themeLibrary", {})
+    if not isinstance(themes, dict) or len(themes) > 100:
+        raise ValueError("Invalid theme library")
+    for name, theme in themes.items():
+        if (not 1 <= len(name) <= 64 or name in ("__proto__", "constructor", "prototype")
+                or not isinstance(theme, dict) or len(theme) > 100
+                or any(type(value) not in (str, int, float) for value in theme.values())):
+            raise ValueError("Invalid saved theme")
     profiles = config.get("profiles", {})
     screens = config.get("screens", {})
     schedules = config.get("schedules", [])
@@ -123,7 +131,7 @@ async def async_setup_entry(hass, entry):
     entry.async_on_unload(async_track_time_interval(hass, cleanup_media, timedelta(hours=1)))
     if warnings_enabled(hass.data[DOMAIN]["config"]):
         hass.data[DOMAIN]["alerts"].wis2.start()
-    frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard-panel", "module_url": "/tiny_liveboard/display.js?v=0.1.19", "embed_iframe": False, "trust_external": False}}, require_admin=False)
+    frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard-panel", "module_url": "/tiny_liveboard/display.js?v=0.1.20", "embed_iframe": False, "trust_external": False}}, require_admin=False)
     return True
 
 async def async_unload_entry(hass, entry):
