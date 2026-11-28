@@ -53,3 +53,14 @@ Næste opgave: kør accepttesten i README på den faktiske vægskærm og med den
 - `frontend/display.js` gør kameradiagnostik tilgængelig i kamerafokus. Optagestatus hentes kun, når knapperne vises. `frontend/camera.js` måler WebRTC-statistik, når signalpanelet er åbent.
 - Headless Chromium verificerede også træk og fortryd i Studio. Lokal HA Core 2025.6 verificerede nægtet medieadgang for en almindelig bruger samt beskyttet afspilning og HTTP Range med en FFmpeg-genereret testfil.
 - Afventer stadig målinger med faktiske kamerastreams, aktive varsler og den fysiske skærm.
+
+
+## 0.1.24 – Python 3.14 og afhængigheder
+
+- Udgangspunktet er `c7a2daa` (0.1.23). Den vedlagte log viser Python 3.14 og fejl i Home Assistants afhængighedsresolver inden konfigurationsdialogen. Loggen angiver ikke Core-patchversionen. Linjerne i traceback matcher den lokalt testede Core 2026.11.3.
+- Core 2026.11.3 begrænser aiomqtt til `>=2.5.0`. Den tidligere `==2.4.0` har ingen løsning sammen med den begrænsning. PyPI-pakkens Python-metadata for 2.4.0 tillader i sig selv Python 3.14.
+- `manifest.json` bruger nu `aiomqtt>=2.5.0,<3.0`. Core 2026.11.3’s pakkeinstaller afviste den gamle pin med Core-begrænsningerne og installerede de nye krav i en tom pakkemappe med aiomqtt 2.5.1, paho-mqtt 2.1.0 og defusedxml 0.7.1. Aiomqtt accepterer Paho 2.1.0, præcis den version Core selv angiver for MQTT. Den øvrige afhængighed, `defusedxml==0.7.1`, er kompatibel med de kontrollerede Core-begrænsninger og bruges fortsat til sikker XML-læsning.
+- `wis2.py` indlæser MQTT og TLS-certifikater i Home Assistants executor. Brokerfejl giver genforsøg med stigende interval, og forbindelsesstatus nulstilles ved afbrydelse og stop. Atom er uafhængig. `__init__.py` registrerer sidepanelet før opstart af WIS2-opgaven.
+- Lokalt på Python 3.14.10 og Core 2026.11.3 bestod konfigurationsdialog, opstart, sidepanelregistrering, HTTP-servering af frontendmodulet, en rigtig lokal kalender via WebSocket og genindlæsning. MQTT- og Atom-nedetid blev simuleret i den kørende Core-test. Separat bestod MQTT-forbindelse, WIS2-abonnement, levering og lukning med de faktiske aiomqtt/Paho-biblioteker mod en lokal MQTT-testbroker.
+- 37 Python-tests, 7 Node-tests, Python/JavaScript-syntaks, Ruff E9/F, afhængighedskontrol, JSON/YAML, cacheversion og frontend/backend-referencer bestod. `tests/test_wis2.py` dækker genforsøg og stop ved brokerfejl samt opstartsfejl ved TLS-initialisering.
+- Installation på brugerens HA-installation, Marketplace/HACS-opdatering og aktive eksterne WIS2-/MeteoAlarm-varsler afventer praktisk test.

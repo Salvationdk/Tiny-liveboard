@@ -1,10 +1,11 @@
-import importlib.util
+import asyncio
 import json
 import pathlib
 import sys
 import types
 import unittest
 from datetime import datetime
+from unittest.mock import patch
 root=pathlib.Path(__file__).resolve().parents[1]/"custom_components/tiny_liveboard"
 pkg=types.ModuleType("wis2_fixture")
 pkg.__path__=[str(root)]
@@ -15,7 +16,7 @@ def timestamp(value):
     except (ValueError,AttributeError): return None
 news.timestamp=timestamp
 sys.modules[news.__name__]=news
-from wis2_fixture.wis2 import notification,parse_cap,WarningIndex,exact_geometry
+from wis2_fixture.wis2 import WIS2Client, notification,parse_cap,WarningIndex,exact_geometry
 
 class Wis2Tests(unittest.TestCase):
     def notice(self):
@@ -40,3 +41,58 @@ class Wis2Tests(unittest.TestCase):
         data=self.notice()
         data["properties"]["countryCode"]="DE"
         self.assertIsNone(notification(json.dumps(data).encode()))
+
+
+class Wis2LifecycleTests(unittest.IsolatedAsyncioTestCase):
+    class MqttError(Exception):
+        pass
+
+    class Hass:
+        async def async_add_executor_job(self, job, *args):
+            return await asyncio.to_thread(job, *args)
+
+        def async_create_background_task(self, coro, name):
+            return asyncio.create_task(coro, name=name)
+
+    async def test_broker_outage_retries_and_stops(self):
+        retried = asyncio.Event()
+        attempts = 0
+        error = self.MqttError
+
+        class OfflineBroker:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                nonlocal attempts
+                attempts += 1
+                if attempts == 2:
+                    retried.set()
+                raise error("broker unavailable")
+
+            async def __aexit__(self, *args):
+                return False
+
+        module = types.SimpleNamespace(Client=OfflineBroker, MqttError=error)
+        client = WIS2Client(self.Hass())
+        with patch("wis2_fixture.wis2.import_module", return_value=module), patch(
+            "wis2_fixture.wis2.RETRY_MIN", 0.001
+        ):
+            client.start()
+            try:
+                await asyncio.wait_for(retried.wait(), 2)
+                self.assertFalse(client.connected)
+            finally:
+                await client.stop()
+        self.assertIsNone(client.task)
+
+    async def test_tls_initialization_failure_leaves_atom_available(self):
+        client = WIS2Client(self.Hass())
+        with patch("wis2_fixture.wis2.import_module", return_value=object()), patch(
+            "wis2_fixture.wis2.ssl.create_default_context", side_effect=OSError("certs unavailable")
+        ):
+            client.start()
+            await asyncio.wait_for(client.task, 2)
+            self.assertFalse(client.connected)
+        await client.stop()
+        self.assertIsNone(client.task)

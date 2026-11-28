@@ -1,8 +1,17 @@
 """MeteoAlarm WIS2 notification and precise geometry decoding."""
+import asyncio
 import json
+import logging
+import ssl
+import time
+from importlib import import_module
 from urllib.parse import urlsplit
 from .regions import valid_ring
 
+_LOGGER = logging.getLogger(__name__)
+RETRY_MIN = 5
+RETRY_MAX = 300
+CONNECT_TIMEOUT = 20
 TOPIC = "origin/a/wis2/eu-eumetnet-warnings/data/core/weather/advisories-warnings"
 
 def notification(payload):
@@ -153,14 +162,14 @@ class WIS2Client:
             self.task=self.hass.async_create_background_task(self.run(),"tiny_liveboard_wis2")
 
     async def stop(self):
-        import asyncio
-        if self.task:
-            self.task.cancel()
-            await asyncio.gather(self.task,return_exceptions=True)
-            self.task=None
+        task = self.task
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            self.task = None
+        self.connected = False
 
     async def download(self, url, limit):
-        import asyncio
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
         parsed=urlsplit(url)
         host=parsed.hostname or ""
@@ -178,7 +187,6 @@ class WIS2Client:
                 return bytes(result)
 
     async def handle(self,payload):
-        import time
         notice=notification(payload)
         if not notice:
             return
@@ -197,31 +205,34 @@ class WIS2Client:
             self.last_success=time.time()
 
     async def run(self):
-        import asyncio
-        import ssl
         try:
-            import aiomqtt
-        except ImportError:
-            import logging
-            logging.getLogger(__name__).info("WIS2 MQTT unavailable; using HTTP warning feed")
+            # Import the client and load the operating system's trusted certificates
+            # off the HA event loop. The dashboard can load while either is pending.
+            mqtt = await self.hass.async_add_executor_job(import_module, "aiomqtt")
+            tls_context = await self.hass.async_add_executor_job(ssl.create_default_context)
+        except (ImportError, OSError) as err:
+            _LOGGER.warning("WIS2 client initialization failed (%s); using MeteoAlarm Atom", type(err).__name__)
             return
-        delay=5
+
+        delay = RETRY_MIN
         while True:
             try:
-                async with aiomqtt.Client("globalbroker.meteo.fr",port=8883,username="everyone",password="everyone",tls_context=ssl.create_default_context(),timeout=20,max_queued_incoming_messages=256) as client:
-                    await client.subscribe(TOPIC,qos=1)
-                    self.connected=True
-                    delay=5
+                async with mqtt.Client(
+                    "globalbroker.meteo.fr", port=8883, username="everyone",
+                    password="everyone", tls_context=tls_context,
+                    timeout=CONNECT_TIMEOUT, max_queued_incoming_messages=256,
+                ) as client:
+                    await client.subscribe(TOPIC, qos=1)
+                    self.connected = True
                     async for message in client.messages:
+                        delay = RETRY_MIN
                         try:
                             await self.handle(message.payload)
-                        except Exception:
-                            continue
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                pass
+                        except Exception as err:
+                            _LOGGER.debug("Ignoring WIS2 message (%s)", type(err).__name__)
+            except (mqtt.MqttError, OSError, TimeoutError) as err:
+                _LOGGER.debug("WIS2 disconnected (%s); retry in %s seconds", type(err).__name__, delay)
             finally:
-                self.connected=False
+                self.connected = False
             await asyncio.sleep(delay)
-            delay=min(delay*2,300)
+            delay = min(delay * 2, RETRY_MAX)

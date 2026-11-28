@@ -1,7 +1,7 @@
 {
   "domain": "tiny_liveboard",
   "name": "Tiny LiveBoard",
-  "version": "0.1.23",
+  "version": "0.1.24",
   "documentation": "https://github.com/Salvationdk/Tiny-liveboard",
   "issue_tracker": "https://github.com/Salvationdk/Tiny-liveboard/issues",
   "codeowners": [
@@ -16,6 +16,6 @@
   ],
   "requirements": [
     "defusedxml==0.7.1",
-    "aiomqtt==2.4.0"
+    "aiomqtt>=2.5.0,<3.0"
   ]
 }

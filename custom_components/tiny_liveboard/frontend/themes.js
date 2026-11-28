@@ -1,4 +1,4 @@
-import {weatherArt,weatherCatalog} from "./weather.js?v=0.1.23";
+import {weatherArt,weatherCatalog} from "./weather.js?v=0.1.24";
 export const themes={
  midnight:["#10141d","#202936","#ffffff","#38bdf8"],nordic:["#edf0f2","#ffffff","#263340","#527d91"],amoled:["#000000","#121212","#ffffff","#a3e635"],glass:["#263b50","#415a70","#ffffff","#a5e4ff"],warm:["#302822","#493b30","#f5e7d4","#e7b47b"],cyber:["#100d20","#211934","#eee6ff","#c084fc"],
  frost:["#e9edf3","#ffffff","#20232a","#007aff"],appleMidnight:["#101923","#263646","#f1f5f9","#64aaff"],titanium:["#a6a198","#d8d3ca","#35332f","#807569"],space:["#151517","#2b2b2e","#f5f5f7","#a4a4ad"],sierra:["#aec4d8","#dce7f0","#263d53","#477ba7"],alpine:["#263c35","#435e50","#eaf2e8","#a8c5a3"],purple:["#292336","#473b56","#f2eaf8","#c0a4de"],desert:["#c7ae99","#f0dfce","#503e32","#ac8263"],liquidLight:["#cad9ed","#ffffff","#23334d","#007aff"],liquidDark:["#17283e","#263b55","#f0f5ff","#81c5ff"],tinyNeon:["#050610","#121329","#e7faff","#00e5ff"]};

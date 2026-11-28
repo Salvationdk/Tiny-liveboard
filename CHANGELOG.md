@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.24
+
+- Fixed installation on Home Assistant Core with Python 3.14 by allowing the Core-compatible aiomqtt 2.5 series and later compatible 2.x versions.
+- Registered the sidebar before starting WIS2. The connector initializes TLS off the event loop, retries broker failures with backoff and leaves MeteoAlarm Atom available independently.
+
 ## 0.1.23
 
 - Restored camera signal diagnostics in focused view. Recording status and WebRTC statistics are collected while their controls are visible.
