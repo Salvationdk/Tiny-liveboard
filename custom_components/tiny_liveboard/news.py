@@ -2,6 +2,7 @@
 import asyncio
 import aiohttp
 import hashlib
+import base64
 import socket
 import ipaddress
 import time
@@ -110,7 +111,10 @@ def parse_feed(payload):
             link = link.strip()[:2048] if u.scheme in ("https", "http") and u.hostname and not u.username and not u.password else ""
         except ValueError:
             link = ""
-        items.append({"url": link, "publisher": publisher[:100], "body": body, "title": title[:300], "breaking": bool(set(categories) & {"breaking news", "breaking"}), "published": published})
+        image = next((n.get("url", "") for n in item.iter() if n.tag in ("thumbnail", "enclosure", "content") and (n.tag == "thumbnail" or (n.get("type") or "").startswith("image/") or n.get("medium") == "image")), "")
+        if not image.startswith("https://"):
+            image = ""
+        items.append({"image": image, "url": link, "publisher": publisher[:100], "body": body, "title": title[:300], "breaking": bool(set(categories) & {"breaking news", "breaking"}), "published": published})
     return items[:50]
 
 class PublicResolver(aiohttp.abc.AbstractResolver):
@@ -154,6 +158,9 @@ class NewsEngine:
         self.urls = {}
         self.lock = asyncio.Lock()
 
+    def find(self, url, selected):
+        return next((item for name in selected for item in self.items.get(name, []) if item.get("url") == url and url), None)
+
     async def get(self, selected=None):
         selected = {s:SOURCES[s] for s in DEFAULT_SOURCES} if selected is None else selected
         if not isinstance(selected, dict):
@@ -186,7 +193,7 @@ class NewsEngine:
                 if key in seen:
                     continue
                 seen.add(key)
-                result.append(dict(item, breaking=bool(self.status.get(item.get("source") or source, {}).get("ok", True) and item["breaking"] and item["published"] is not None and 0 <= age <= BREAKING_TTL)))
+                result.append(dict(item, breaking=bool(self.status.get(source, {}).get("ok", True) and item["breaking"] and item["published"] is not None and 0 <= age <= BREAKING_TTL)))
         return sorted(result, key=lambda item: (not item["breaking"], -(item["published"] if item["published"] is not None else item["received"])))[:60]
 
     async def fetch(self, name, url):
@@ -213,8 +220,8 @@ class NewsEngine:
                 else:
                     raise ValueError("Too many feed redirects")
             parsed = await self.hass.async_add_executor_job(parse_feed, bytes(chunks))
-            previous = {item["title"]: item["received"] for item in self.items.get(name, [])}
-            self.items[name] = [dict(item, source=name.split(" · ")[0] if name.startswith("Egen: ") else name, received=previous.get(item["title"], time.time())) for item in parsed]
+            previous = {item["title"]: item for item in self.items.get(name, [])}
+            self.items[name] = [dict(item, source=name.split(" · ")[0] if name.startswith("Egen: ") else name, received=previous.get(item["title"], {}).get("received", time.time())) for item in parsed]
             self.status[name] = {"ok": True, "count": len(parsed), "checked": time.time(), "last_success": time.time()}
         except Exception as exc:
             self.status[name] = {"ok": False, "checked": time.time(), "error": str(exc)[:160] or type(exc).__name__, "last_success": self.status.get(name, {}).get("last_success"), "cached_count": len(self.items.get(name, []))}
@@ -291,6 +298,20 @@ PUBLIC_ARTICLE_DOMAINS = frozenset(("dr.dk","politi.dk","dst.dk"))
 async def article_metadata(hass, url):
     # Only explicitly trusted public publisher hosts; never follow redirects.
     u = urlsplit(url)
+    # Older Google News IDs contain a literal publisher URL. Do not use
+    # undocumented RPCs, authentication or subscription bypasses.
+    if u.hostname == "news.google.com":
+        token = u.path.rstrip("/").rsplit("/", 1)[-1]
+        try:
+            raw = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))
+            match = re.search(rb"https://[\x21-\x7e]+", raw)
+            if match:
+                candidate = match.group().decode("ascii")
+                parsed = urlsplit(candidate)
+                if (parsed.hostname or "").removeprefix("www.") in ARTICLE_DOMAINS:
+                    url, u = candidate, parsed
+        except (ValueError, UnicodeError):
+            pass
     if u.scheme == "https" and u.hostname == "news.google.com" and not u.username and not u.password and u.port in (None,443):
         async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(resolver=PublicResolver(), use_dns_cache=False), trust_env=False) as session, asyncio.timeout(8):
             async with session.get(url, allow_redirects=False) as response:
