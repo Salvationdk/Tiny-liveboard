@@ -24,3 +24,11 @@ Udgangspunkt: `38e7d18`, version 0.1.18.
 - `frontend/display.js` bruger dashboardets renderer i Studio og centrerer dashboardet i 16:9. Preview bruger HA-tilstande og senest hentede nyheder. Kamerafelterne bruger navne og formatforhold for at undgå ekstra videoforbindelser under redigering.
 - `frontend/themes.js` gemmer genbrugelige temaer i den centrale konfiguration. `__init__.py` validerer biblioteket. Lokale browser-temaer kan importeres ved første Studio-gem.
 - Syntaks for de ændrede JavaScript-moduler og profilers/nyheders Python-tests gennemført. Afventer visuel test af drag, resize, gitter og billedskalering på fysisk skærm.
+
+## C og D – adgang, skærme og medier
+
+- Version 0.1.21. B blev gemt som `c5fd715`.
+- `__init__.py` kontrollerer profiladgang på serveren. Almindelige brugere får kun tilladte profiler, skærmtildelinger og HA-kameraer. Direkte streamadresser og andre brugeres ID'er filtreres fra. Studio kan sætte bruger-ID'er pr. profil. Dashboardet prøver igen ved opstartsfejl.
+- `media.py`, `motion.py` og `__init__.py` anvender privat lagring og afspilningslinks med tidsbegrænset, filspecifik adgang. Gamle optagelser flyttes ved opstart. Direkte RTSP kan bruges til motion og prebuffer. Optagelser og snapshots har samtidighedsgrænser, og skjulte kamerafelter starter ikke videoforbindelser.
+- Dashboardets direkte go2rtc bruges af administratorer. Almindelige vægskærmsbrugere skal have adgang til en Home Assistant-kameraentitet. Praktisk kontrol af eksisterende mediefiler, optagelse, linkudløb, tvungen afbrydelse og FFmpeg mangler.
+- Python 35 test bestået med den udgående radarsuite udeladt. Kamera- og profiltest i Node bestod.

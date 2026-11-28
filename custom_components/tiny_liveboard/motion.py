@@ -5,6 +5,7 @@ import time
 import re
 from collections import deque
 from homeassistant.helpers.storage import Store
+from .media import configured_stream
 import json
 import logging
 _LOGGER = logging.getLogger(__name__)
@@ -31,20 +32,21 @@ class MotionEngine:
             self.loaded = True
         seen = set()
         for i in range(2):
-            entity = cfg.get("camera"+str(i), "")
+            source = configured_stream(cfg, i)
+            entity = f"camera.tiny_liveboard_direct_{i}" if source else cfg.get(f"camera{i}", "")
             if cfg.get("motion"+str(i)) == "yes" and re.fullmatch(r"camera\.[a-z0-9_]+", entity or "") and entity not in seen:
                 seen.add(entity)
                 try:
                     seconds = max(0,min(30,int(cfg.get('motionPre'+str(i),0))))
                     if seconds and cfg.get('motionRecord'+str(i)) == 'yes':
-                        self.tasks.append(asyncio.create_task(self.keep_buffer(entity,seconds)))
+                        self.tasks.append(asyncio.create_task(self.keep_buffer(entity,seconds,source)))
                 except (ValueError,TypeError):
                     pass
                 external = cfg.get("motionSensor"+str(i), "")
                 if cfg.get("motionMethod"+str(i)) == "external" and re.fullmatch(r"binary_sensor\.[a-z0-9_]+", external or ""):
-                    self.tasks.append(asyncio.create_task(self.run_external(entity, external, cfg, str(i))))
+                    self.tasks.append(asyncio.create_task(self.run_external(entity, external, cfg, str(i), source)))
                 else:
-                    self.tasks.append(asyncio.create_task(self.run(entity, cfg, str(i))))
+                    self.tasks.append(asyncio.create_task(self.run(entity, cfg, str(i), source)))
 
     async def close(self):
         for task in self.tasks:
@@ -54,11 +56,11 @@ class MotionEngine:
         for entity in list(self.media.buffers):
             await self.media.stop_buffer(entity)
 
-    async def keep_buffer(self, entity, seconds):
+    async def keep_buffer(self, entity, seconds, source):
         try:
             while True:
                 try:
-                    await asyncio.wait_for(self.media.start_buffer(entity,seconds),30)
+                    await asyncio.wait_for(self.media.start_buffer(entity,seconds,source),30)
                     job=self.media.buffers.get(entity)
                     if job:
                         await job[0].wait()
@@ -70,7 +72,7 @@ class MotionEngine:
         finally:
             await self.media.stop_buffer(entity)
 
-    async def run(self, entity, cfg, i):
+    async def run(self, entity, cfg, i, source_override):
         from .media import async_get_stream_source
         sensor = "binary_sensor.tiny_liveboard_camera_"+str(int(i)+1)+"_motion"
         level_sensor = "sensor.tiny_liveboard_camera_"+str(int(i)+1)+"_motion_level"
@@ -88,7 +90,7 @@ class MotionEngine:
             while True:
                 proc = None
                 try:
-                    source = await asyncio.wait_for(async_get_stream_source(self.hass,entity),15)
+                    source = source_override or await asyncio.wait_for(async_get_stream_source(self.hass,entity),15)
                     ffmpeg = await self.hass.async_add_executor_job(shutil.which,"ffmpeg")
                     if not source or not ffmpeg:
                         raise ValueError("Stream unavailable")
@@ -115,12 +117,12 @@ class MotionEngine:
                                 self.hass.states.async_set(sensor,"on",{"device_class":"motion","camera":entity})
                                 if cfg.get("motionSnapshot"+i) == "yes":
                                     try:
-                                        await self.media.snapshot(entity)
+                                        await self.media.snapshot(entity, source_override)
                                     except Exception:
                                         pass
                                 if cfg.get("motionRecord"+i) == "yes" and entity not in self.media.jobs:
                                     try:
-                                        await self.media.start(entity,30)
+                                        await self.media.start(entity,30,source_override)
                                         self.owned[entity] = self.media.jobs[entity][0]
                                     except Exception:
                                         pass
@@ -149,7 +151,7 @@ class MotionEngine:
             self.hass.states.async_remove(sensor)
             self.hass.states.async_remove(level_sensor)
 
-    async def run_external(self, entity, external, cfg, i):
+    async def run_external(self, entity, external, cfg, i, source):
         sensor = "binary_sensor.tiny_liveboard_camera_"+str(int(i)+1)+"_motion"
         active = False
         last = 0
@@ -171,9 +173,9 @@ class MotionEngine:
                         for action in ("snapshot","record"):
                             try:
                                 if action == "snapshot" and cfg.get("motionSnapshot"+i) == "yes":
-                                    await self.media.snapshot(entity)
+                                    await self.media.snapshot(entity, source)
                                 if action == "record" and cfg.get("motionRecord"+i) == "yes" and entity not in self.media.jobs:
-                                    await self.media.start(entity,30)
+                                    await self.media.start(entity,30,source)
                                     self.owned[entity] = self.media.jobs[entity][0]
                             except Exception:
                                 _LOGGER.warning("External motion capture failed for %s",entity)

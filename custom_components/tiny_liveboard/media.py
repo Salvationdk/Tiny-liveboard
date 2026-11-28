@@ -11,6 +11,9 @@ from urllib.parse import urlsplit
 from pathlib import Path
 from datetime import datetime, timezone
 from uuid import uuid4
+
+MEDIA_FILENAME = re.compile(r"[a-zA-Z0-9_]{1,230}\.(jpg|png|mp4)")
+MEDIA_KINDS = ("snapshots", "recordings")
 async def async_get_image(hass, entity):
     from homeassistant.components.camera import async_get_image as capture
     return await capture(hass, entity)
@@ -21,23 +24,72 @@ async def async_get_stream_source(hass, entity):
 class MediaEngine:
     def __init__(self, hass):
         self.hass = hass
-        self.root = Path("/media/tiny_liveboard")
+        self.root = Path(hass.config.path(".tiny_liveboard_media"))
         self.jobs = {}
         self.buffers = {}
         self.started = {}
         self.finalizing = set()
         self.file_lock = threading.RLock()
         self.lock = asyncio.Lock()
+        self.snapshot_slots = asyncio.Semaphore(2)
+
+    def migrate(self):
+        """Move existing captures out of the shared Home Assistant media source."""
+        legacy = Path("/media/tiny_liveboard")
+        if legacy.is_symlink():
+            return
+        for kind in MEDIA_KINDS:
+            source = legacy / kind
+            if not source.is_dir() or source.is_symlink():
+                continue
+            target = self.root / kind
+            target.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if target.is_symlink():
+                raise ValueError("Invalid media storage directory")
+            for item in source.iterdir():
+                name = item.name.removesuffix(".lock")
+                if item.is_symlink() or not item.is_file() or not MEDIA_FILENAME.fullmatch(name):
+                    continue
+                destination = target / item.name
+                if not destination.exists():
+                    shutil.move(item, destination)
+
+    def file(self, kind, name):
+        if kind not in MEDIA_KINDS or not MEDIA_FILENAME.fullmatch(name):
+            raise ValueError("Invalid media file")
+        folder = self.root / kind
+        path = folder / name
+        if self.root.is_symlink() or folder.is_symlink() or path.is_symlink() or not path.is_file():
+            raise ValueError("Media unavailable")
+        return path
+
+    def active_files(self):
+        active = {path.name for _, path in self.jobs.values()}
+        return active | {Path(name).stem + "_pre.mp4" for name in active} | self.finalizing
+
+    def playback_file(self, kind, name):
+        with self.file_lock:
+            if name in self.active_files():
+                raise ValueError("Recording active")
+            return self.file(kind, name)
 
     def destination(self, entity, kind, suffix):
         folder = self.root / kind
-        folder.mkdir(parents=True, exist_ok=True)
+        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if self.root.is_symlink() or folder.is_symlink():
+            raise ValueError("Invalid media storage directory")
         if shutil.disk_usage(folder).free < 512 * 1024**2:
             raise ValueError("Insufficient free disk space")
         name = entity.replace(".", "_") + "_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:8]
         return folder / (name + suffix)
 
     async def snapshot(self, entity, source=None):
+        if self.snapshot_slots.locked():
+            raise ValueError("Too many snapshots in progress")
+        async with self.snapshot_slots:
+            return await self._snapshot(entity, source)
+
+    async def _snapshot(self, entity, source):
         if source:
             ffmpeg = await self.hass.async_add_executor_job(shutil.which, 'ffmpeg')
             if not ffmpeg:
@@ -55,7 +107,9 @@ class MediaEngine:
                     await proc.wait()
                 if proc.returncode:
                     await self.hass.async_add_executor_job(lambda: path.unlink(missing_ok=True))
-        image = await async_get_image(self.hass, entity)
+        image = await asyncio.wait_for(async_get_image(self.hass, entity), 15)
+        if len(image.content) > 16 * 1024**2:
+            raise ValueError("Snapshot too large")
         suffix = ".png" if image.content_type == "image/png" else ".jpg"
         path = await self.hass.async_add_executor_job(self.destination, entity, "snapshots", suffix)
         await self.hass.async_add_executor_job(path.write_bytes, image.content)
@@ -67,7 +121,7 @@ class MediaEngine:
                 raise ValueError("Camera already recording")
             if len(self.jobs) >= 2:
                 raise ValueError("Maximum two recordings")
-            source = source_override or await async_get_stream_source(self.hass, entity)
+            source = source_override or await asyncio.wait_for(async_get_stream_source(self.hass, entity), 15)
             if not source:
                 raise ValueError("Camera has no server-side stream source")
             ffmpeg = await self.hass.async_add_executor_job(shutil.which, "ffmpeg")
@@ -75,22 +129,26 @@ class MediaEngine:
                 raise ValueError("FFmpeg unavailable")
             path = await self.hass.async_add_executor_job(self.destination, entity, "recordings", ".mp4")
             proc = await asyncio.create_subprocess_exec(ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", source, "-map", "0:v:0", "-c:v", "copy", "-an", "-t", str(minutes*60), "-fs", str(512*1024**2), "-movflags", "+frag_keyframe+empty_moov", str(path), stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-            self.jobs[entity] = (proc, path)
+            with self.file_lock:
+                self.jobs[entity] = (proc, path)
+                self.started[entity] = time.monotonic()
+            self.hass.async_create_task(self.watch(entity, proc, path))
             try:
                 await self.save_preroll(entity, path)
             except Exception:
                 _LOGGER.warning('Pre-recording export failed; keeping main recording', exc_info=True)
-            self.started[entity] = time.monotonic()
-            self.hass.async_create_task(self.watch(entity, proc, path))
             return {"recording": True, "file": path.name}
 
     async def watch(self, entity, proc, path):
         await proc.wait()
         async with self.lock:
             if self.jobs.get(entity, (None,))[0] is proc:
-                await self.merge_preroll(path)
-                self.jobs.pop(entity, None)
-                self.started.pop(entity, None)
+                try:
+                    await self.merge_preroll(path)
+                finally:
+                    with self.file_lock:
+                        self.jobs.pop(entity, None)
+                        self.started.pop(entity, None)
 
     async def stop(self, entity):
         async with self.lock:
@@ -99,15 +157,21 @@ class MediaEngine:
                 return {"recording": False}
             proc, path = job
             if proc.returncode is None:
-                proc.terminate()
+                try:
+                    proc.terminate()
+                except ProcessLookupError:
+                    pass
                 try:
                     await asyncio.wait_for(proc.wait(), 10)
                 except asyncio.TimeoutError:
                     proc.kill()
                     await proc.wait()
-            await self.merge_preroll(path)
-            self.jobs.pop(entity, None)
-            self.started.pop(entity, None)
+            try:
+                await self.merge_preroll(path)
+            finally:
+                with self.file_lock:
+                    self.jobs.pop(entity, None)
+                    self.started.pop(entity, None)
             return {"recording": False, "file": path.name}
 
     async def close(self):
@@ -117,16 +181,18 @@ class MediaEngine:
             await self.stop(entity)
 
     def list_files(self, limit=500):
-        active = {path.name for _, path in self.jobs.values()}
-        active |= {Path(name).stem+'_pre.mp4' for name in active}
-        active |= self.finalizing
+        with self.file_lock:
+            return self._list_files(limit)
+
+    def _list_files(self, limit):
+        active = self.active_files()
         result = []
         for kind in ("snapshots", "recordings"):
             folder = self.root / kind
-            if not folder.exists():
+            if self.root.is_symlink() or folder.is_symlink() or not folder.is_dir():
                 continue
             for path in folder.iterdir():
-                if path.is_symlink() or not path.is_file() or path.suffix not in (".jpg", ".png", ".mp4") or path.name in active:
+                if path.is_symlink() or not path.is_file() or not MEDIA_FILENAME.fullmatch(path.name) or path.name in active:
                     continue
                 stat = path.stat()
                 result.append({"kind": kind, "file": path.name, "size": stat.st_size, "modified": stat.st_mtime, "locked": path.with_suffix(path.suffix + ".lock").is_file()})
@@ -141,9 +207,7 @@ class MediaEngine:
             raise ValueError("Invalid media file")
         if name in self.finalizing or any(name in (path.name,path.stem+'_pre.mp4') for _, path in self.jobs.values()):
             raise ValueError("Recording active")
-        path = self.root / kind / name
-        if path.is_symlink() or not path.is_file():
-            raise ValueError("Media unavailable")
+        path = self.file(kind, name)
         if path.with_suffix(path.suffix + ".lock").exists():
             raise ValueError("Media is locked")
         path.unlink()
@@ -181,21 +245,21 @@ class MediaEngine:
         with self.file_lock:
             if kind not in ("snapshots", "recordings") or not re.fullmatch(r"[a-zA-Z0-9_]+\.(jpg|png|mp4)", name):
                 raise ValueError("Invalid media file")
-            path = self.root / kind / name
-            if path.is_symlink() or not path.is_file():
-                raise ValueError("Media unavailable")
+            path = self.file(kind, name)
             marker = path.with_suffix(path.suffix + ".lock")
+            if marker.is_symlink():
+                raise ValueError("Invalid media marker")
             if locked:
                 marker.touch(exist_ok=True)
             else:
                 marker.unlink(missing_ok=True)
             return {"locked": locked}
 
-    async def start_buffer(self, entity, seconds):
+    async def start_buffer(self, entity, seconds, source_override=None):
         await self.stop_buffer(entity)
         if not seconds:
             return
-        source = await async_get_stream_source(self.hass, entity)
+        source = source_override or await asyncio.wait_for(async_get_stream_source(self.hass, entity), 15)
         ffmpeg = await self.hass.async_add_executor_job(shutil.which, "ffmpeg")
         if not source or not ffmpeg:
             raise ValueError("Buffer source unavailable")
@@ -254,7 +318,8 @@ class MediaEngine:
     async def merge_preroll(self, path):
         pre = path.with_name(path.stem+"_pre.mp4")
         tmp = path.with_name(path.stem+"_merge.tmp")
-        self.finalizing.update((path.name,pre.name))
+        with self.file_lock:
+            self.finalizing.update((path.name, pre.name))
         worker = None
         try:
             def ready():
@@ -287,14 +352,13 @@ class MediaEngine:
                     pass
                 await worker.wait()
             await self.hass.async_add_executor_job(lambda:tmp.unlink(missing_ok=True))
-            self.finalizing.difference_update((path.name,pre.name))
+            with self.file_lock:
+                self.finalizing.difference_update((path.name, pre.name))
 
     async def thumbnail(self, name):
         if not re.fullmatch(r"[a-zA-Z0-9_]+\.mp4", name):
             raise ValueError("Invalid recording")
-        source = self.root / "recordings" / name
-        if source.is_symlink() or not source.is_file() or any(p == source for _,p in self.jobs.values()):
-            raise ValueError("Recording unavailable")
+        source = await self.hass.async_add_executor_job(self.playback_file, "recordings", name)
         ffmpeg = await self.hass.async_add_executor_job(shutil.which,"ffmpeg")
         if not ffmpeg:
             raise ValueError("FFmpeg unavailable")
@@ -312,9 +376,13 @@ class MediaEngine:
 
 def configured_stream(cfg, slot):
     value = cfg.get("captureRtsp"+str(slot),"")
-    if not value:
+    if not isinstance(value, str) or not value or len(value) > 2048 or any(ord(c) < 32 for c in value):
         return None
-    parsed = urlsplit(value)
-    if parsed.scheme not in ("rtsp","rtsps") or not parsed.hostname or len(value)>2048:
-        raise ValueError("Invalid configured RTSP stream")
+    try:
+        parsed = urlsplit(value)
+        parsed.port
+    except ValueError:
+        return None
+    if parsed.scheme not in ("rtsp","rtsps") or not parsed.hostname:
+        return None
     return value
