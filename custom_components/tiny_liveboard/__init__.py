@@ -219,12 +219,23 @@ async def screen_status(hass, connection, msg):
     connection.send_result(msg["id"],result)
 
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/camera_media", vol.Required("action"): vol.In(("snapshot","start","stop","status")), vol.Required("entity"): vol.Match(r"^camera\.[a-z0-9_]+$"), vol.Optional("slot"): vol.In((0,1)), vol.Optional("profile", default=""): str, vol.Optional("minutes", default=30): vol.All(int,vol.Range(min=1,max=60))})
-@websocket_api.require_admin
 @websocket_api.async_response
 async def camera_media(hass, connection, msg):
     engine = hass.data[DOMAIN]["media"]
     entity = msg["entity"]
     try:
+        if not connection.user.is_admin:
+            base = hass.data[DOMAIN]["config"]
+            cfg = profile_config(base, msg["profile"])
+            allowed = str(cfg.get("captureUsers","")).split(",")
+            slot = msg.get("slot")
+            if connection.user.id not in [x.strip() for x in allowed] or slot not in (0,1) or cfg.get("capture"+str(slot)) != "yes" or entity != (cfg.get("camera"+str(slot)) or "camera.tiny_liveboard_direct_"+str(slot)):
+                connection.send_error(msg["id"], "unauthorized", "Camera capture not permitted")
+                return
+            permission = "captureAllowSnapshot" if msg["action"] == "snapshot" else "captureAllowRecord"
+            if cfg.get(permission) != "yes":
+                connection.send_error(msg["id"], "unauthorized", "Capture action not permitted")
+                return
         source = None
         if "slot" in msg:
             cfg = profile_config(hass.data[DOMAIN]["config"], msg["profile"])
