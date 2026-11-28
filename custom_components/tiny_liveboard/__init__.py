@@ -211,7 +211,8 @@ async def news_archive(hass, connection, msg):
                 if len(content) > len(saved_item.get("body") or ""):
                     saved_item["body"] = content
                 saved_item["article_complete"] = bool(metadata.get("article"))
-                saved_item["image"] = metadata.get("image", "")
+                saved_item["image"] = metadata.get("image") or saved_item.get("image", "")
+                saved_item["original_url"] = metadata.get("url") or url
                 entries.insert(0, {**saved_item, "id": key, "saved": time.time()})
         elif msg["action"] == "delete":
             entries = [x for x in entries if x["id"] != key]
@@ -343,8 +344,9 @@ async def media_gallery(hass, connection, msg):
     engine = hass.data[DOMAIN]["media"]
     try:
         if msg["action"] == "list":
-            result = await hass.async_add_executor_job(engine.list_files)
-            result["items"] = [item for item in result["items"] if allowed_file(item["file"])]
+            result = await hass.async_add_executor_job(engine.list_files, None)
+            permitted = [item for item in result["items"] if allowed_file(item["file"])]
+            result = {"items": permitted[:500], "bytes": sum(item["size"] for item in permitted)}
         elif msg["action"] == "thumbnail":
             result = await engine.thumbnail(msg["file"])
         elif msg["action"] in ("lock", "unlock"):
@@ -353,7 +355,7 @@ async def media_gallery(hass, connection, msg):
             await hass.async_add_executor_job(engine.delete_file, msg["kind"], msg["file"])
             result = {}
         else:
-            listing = await hass.async_add_executor_job(engine.list_files)
+            listing = await hass.async_add_executor_job(engine.list_files, None)
             if not any(i["kind"] == msg["kind"] and i["file"] == msg["file"] for i in listing["items"]):
                 raise ValueError("Unknown media")
             media = await async_resolve_media(hass, "media-source://media_source/local/tiny_liveboard/" + msg["kind"] + "/" + msg["file"], None)
