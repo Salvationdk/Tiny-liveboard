@@ -191,9 +191,18 @@ class ArticleMetadata(HTMLParser):
         self.paragraph = None
         self.paragraphs = []
         self.restricted = False
+        self.skip_tags = []
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
+        if self.skip_tags:
+            if tag not in ("area","base","br","col","embed","hr","img","input","link","meta","param","source","track","wbr"):
+                self.skip_tags.append(tag)
+            return
+        if tag in ("script","style","nav","aside","footer","template","noscript") or "hidden" in a or a.get("aria-hidden") == "true" or re.search(r"display\s*:\s*none|visibility\s*:\s*hidden", a.get("style") or "", re.I):
+            if tag not in ("img","input","meta","link","br","hr","source"):
+                self.skip_tags.append(tag)
+            return
         if tag == "article":
             self.article_depth += 1
         if self.article_depth and tag in ("p", "h2", "h3"):
@@ -207,10 +216,15 @@ class ArticleMetadata(HTMLParser):
             self.values.setdefault(key, a.get("content", "")[:4000])
 
     def handle_data(self, data):
-        if self.paragraph is not None:
+        if not self.skip_tags and self.paragraph is not None:
             self.paragraph.append(data)
 
     def handle_endtag(self, tag):
+        if self.skip_tags:
+            if tag in self.skip_tags:
+                while self.skip_tags.pop() != tag:
+                    pass
+            return
         if tag in ("p", "h2", "h3") and self.paragraph is not None:
             value = " ".join("".join(self.paragraph).split())
             if value:
