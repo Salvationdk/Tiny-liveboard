@@ -115,7 +115,7 @@ async def async_setup_entry(hass, entry):
     entry.async_on_unload(async_track_time_interval(hass, cleanup_media, timedelta(hours=1)))
     if warnings_enabled(hass.data[DOMAIN]["config"]):
         hass.data[DOMAIN]["alerts"].wis2.start()
-    frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard-panel", "module_url": "/tiny_liveboard/display.js?v=0.1.14", "embed_iframe": False, "trust_external": False}}, require_admin=False)
+    frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard-panel", "module_url": "/tiny_liveboard/display.js?v=0.1.15", "embed_iframe": False, "trust_external": False}}, require_admin=False)
     return True
 
 async def async_unload_entry(hass, entry):
@@ -362,8 +362,15 @@ async def media_gallery(hass, connection, msg):
     except Exception:
         connection.send_error(msg["id"], "media_failed", "Media operation failed")
 
-@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/motion_history"})
-@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/motion_history", vol.Optional("profile", default=""): str})
 @websocket_api.async_response
 async def motion_history(hass, connection, msg):
-    connection.send_result(msg["id"], list(reversed(hass.data[DOMAIN]["motion"].history)))
+    history = list(reversed(hass.data[DOMAIN]["motion"].history))
+    if not connection.user.is_admin:
+        cfg = profile_config(hass.data[DOMAIN]["config"], msg["profile"])
+        if connection.user.id not in [x.strip() for x in str(cfg.get("captureUsers","")).split(",")] or cfg.get("captureAllowGallery") != "yes":
+            connection.send_error(msg["id"], "unauthorized", "Motion history not permitted")
+            return
+        cameras = {cfg.get("camera"+str(slot)) or "camera.tiny_liveboard_direct_"+str(slot) for slot in (0,1) if cfg.get("capture"+str(slot)) == "yes"}
+        history = [item for item in history if item.get("camera") in cameras]
+    connection.send_result(msg["id"], history)
