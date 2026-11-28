@@ -2,6 +2,7 @@
 import asyncio
 import aiohttp
 import hashlib
+import json
 import base64
 import socket
 import ipaddress
@@ -237,9 +238,13 @@ class ArticleMetadata(HTMLParser):
         self.restricted = False
         self.explicit_free = False
         self.skip_tags = []
+        self.ld_parts = None
+        self.ld_documents = []
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
+        if tag == "script" and (a.get("type") or "").lower() == "application/ld+json":
+            self.ld_parts = []
         if a.get("itemprop") == "isAccessibleForFree":
             value = (a.get("content") or "").lower()
             self.explicit_free |= value == "true"
@@ -263,14 +268,22 @@ class ArticleMetadata(HTMLParser):
         if tag != "meta":
             return
         key = a.get("property") or a.get("name")
-        if key in ("og:description", "description", "twitter:description", "og:image"):
+        if key in ("og:description", "description", "twitter:description", "og:image", "article:published_time"):
             self.values.setdefault(key, a.get("content", "")[:4000])
 
     def handle_data(self, data):
+        if self.ld_parts is not None:
+            self.ld_parts.append(data)
         if not self.skip_tags and self.paragraph is not None:
             self.paragraph.append(data)
 
     def handle_endtag(self, tag):
+        if tag == "script" and self.ld_parts is not None:
+            try:
+                self.ld_documents.append(json.loads("".join(self.ld_parts)))
+            except (ValueError, RecursionError):
+                pass
+            self.ld_parts = None
         if self.skip_tags:
             if tag in self.skip_tags:
                 while self.skip_tags.pop() != tag:
@@ -284,13 +297,58 @@ class ArticleMetadata(HTMLParser):
         if tag == "article":
             self.article_depth = max(0, self.article_depth - 1)
 
+def article_nodes(documents):
+    pending = list(documents)
+    for _ in range(1000):
+        if not pending:
+            break
+        node = pending.pop()
+        if isinstance(node, list):
+            pending.extend(node[:100])
+        elif isinstance(node, dict):
+            kinds = node.get("@type", [])
+            kinds = [kinds] if isinstance(kinds, str) else kinds
+            if isinstance(kinds, list) and any(k in ("Article", "NewsArticle", "ReportageNewsArticle", "BlogPosting", "AnalysisNewsArticle") for k in kinds):
+                yield node
+            for key in ("@graph", "mainEntity", "hasPart"):
+                if key in node:
+                    pending.append(node[key])
+
 def parse_article_metadata(payload):
     parser = ArticleMetadata()
     parser.feed(payload.decode("utf-8", errors="replace"))
+    nodes = list(article_nodes(parser.ld_documents))
+    def access(value):
+        return str(value).lower()
+    restricted = parser.restricted or any(access(n.get("isAccessibleForFree")) == "false" for n in nodes)
+    for n in nodes:
+        parts = n.get("hasPart", [])
+        parts = [parts] if isinstance(parts, dict) else parts
+        if isinstance(parts, list) and any(isinstance(p, dict) and access(p.get("isAccessibleForFree")) == "false" for p in parts):
+            restricted = True
+    explicit_free = parser.explicit_free or any(access(n.get("isAccessibleForFree")) == "true" for n in nodes)
     description = news_text(parser.values.get("og:description") or parser.values.get("description") or parser.values.get("twitter:description"))
-    # Extract only visible article markup on the public broadcaster.
-    # Do not extract hidden JSON article bodies or subscription content.
-    return {"body": description, "article": "" if parser.restricted else "\n\n".join(parser.paragraphs)[:40000], "image": parser.values.get("og:image", ""), "explicit_free": parser.explicit_free}
+    image = parser.values.get("og:image", "")
+    published = timestamp(parser.values.get("article:published_time"))
+    visible = "\n\n".join(dict.fromkeys(parser.paragraphs))[:40000]
+    candidates = [(visible, "html")]
+    for n in nodes:
+        if not description and isinstance(n.get("description"), str):
+            description = news_text(n["description"])
+        if published is None and isinstance(n.get("datePublished"), str):
+            published = timestamp(n["datePublished"])
+        if not image:
+            value = n.get("image")
+            if isinstance(value, list):
+                value = next(iter(value), "")
+            if isinstance(value, dict):
+                value = value.get("url") or value.get("contentUrl")
+            if isinstance(value, str):
+                image = value
+        if not restricted and access(n.get("isAccessibleForFree")) == "true" and isinstance(n.get("articleBody"), str):
+            candidates.append((news_text(n["articleBody"]), "json-ld"))
+    article, source = max(candidates, key=lambda pair: len(pair[0]))
+    return {"body": description, "article": "" if restricted else article, "image": image, "published": published, "explicit_free": explicit_free, "article_source": source if article and not restricted else "summary"}
 
 ARTICLE_DOMAINS = frozenset(("dr.dk","tv2.dk","tv2east.dk","tv2fyn.dk","tv2nord.dk","tv2ostjylland.dk","tvmidtvest.dk","tvsyd.dk","videnskab.dk","politi.dk","dst.dk","via.ritzau.dk","ekstrabladet.dk","bt.dk","politiken.dk","berlingske.dk","jyllands-posten.dk","information.dk","sn.dk","version2.dk","ing.dk","computerworld.dk","recordere.dk","beredskabsinfo.dk"))
 PUBLIC_ARTICLE_DOMAINS = frozenset(("dr.dk","politi.dk","dst.dk"))
@@ -325,14 +383,28 @@ async def article_metadata(hass, url):
     if u.scheme != "https" or domain not in ARTICLE_DOMAINS or u.username or u.password or u.port not in (None, 443):
         return {}
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(resolver=PublicResolver(), use_dns_cache=False), trust_env=False) as session, asyncio.timeout(10):
-        async with session.get(url, allow_redirects=False) as response:
-            if response.status != 200 or "text/html" not in response.headers.get("Content-Type", ""):
-                return {}
-            chunks = bytearray()
-            async for chunk in response.content.iter_chunked(16384):
-                chunks.extend(chunk)
-                if len(chunks) > MAX_BYTES:
+        for _ in range(5):
+            async with session.get(url, allow_redirects=False) as response:
+                if response.status in (301,302,303,307,308):
+                    target = urljoin(url, response.headers.get("Location", ""))
+                    parsed = urlsplit(target)
+                    target_domain = (parsed.hostname or "").removeprefix("www.")
+                    if target_domain == "nyheder.tv2.dk":
+                        target_domain = "tv2.dk"
+                    if parsed.scheme != "https" or target_domain != domain or parsed.username or parsed.password or parsed.port not in (None,443):
+                        return {}
+                    url = target
+                    continue
+                if response.status != 200 or "text/html" not in response.headers.get("Content-Type", ""):
                     return {}
+                chunks = bytearray()
+                async for chunk in response.content.iter_chunked(16384):
+                    chunks.extend(chunk)
+                    if len(chunks) > MAX_BYTES:
+                        return {}
+                break
+        else:
+            return {}
     result = await hass.async_add_executor_job(parse_article_metadata, bytes(chunks))
     if domain not in PUBLIC_ARTICLE_DOMAINS and not result.get("explicit_free"):
         result.pop("article", None)
