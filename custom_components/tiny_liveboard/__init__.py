@@ -195,7 +195,24 @@ async def news_archive(hass, connection, msg):
                 if len(entries) >= 500:
                     connection.send_error(msg["id"], "limit", "Archive limit reached (500)")
                     return
-                entries.insert(0, {**item, "id": key, "saved": time.time()})
+                metadata = item.get("_metadata")
+                if metadata is None:
+                    try:
+                        async with data["news"].lock:
+                            metadata = item.get("_metadata")
+                            if metadata is None:
+                                metadata = await article_metadata(hass, url)
+                                item["_metadata"] = metadata
+                    except Exception:
+                        metadata = {}
+                saved_item = {k: v for k, v in item.items() if k != "_metadata"}
+                metadata = metadata or {}
+                content = metadata.get("article") or metadata.get("body") or ""
+                if len(content) > len(saved_item.get("body") or ""):
+                    saved_item["body"] = content
+                saved_item["article_complete"] = bool(metadata.get("article"))
+                saved_item["image"] = metadata.get("image", "")
+                entries.insert(0, {**saved_item, "id": key, "saved": time.time()})
         elif msg["action"] == "delete":
             entries = [x for x in entries if x["id"] != key]
         if msg["action"] != "list":
