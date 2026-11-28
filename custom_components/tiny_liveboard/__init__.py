@@ -330,10 +330,21 @@ async def media_gallery(hass, connection, msg):
         if connection.user.id not in allowed or cfg.get("captureAllowGallery") != "yes" or cfg.get(permission) != "yes":
             connection.send_error(msg["id"], "unauthorized", "Media gallery action not permitted")
             return
+    def allowed_file(name):
+        if connection.user.is_admin:
+            return True
+        import re
+        match = re.fullmatch(r"(.+)_\d{8}_\d{6}_[a-f0-9]{8}(?:_pre)?\.(?:jpg|png|mp4)", name or "")
+        cameras = {(cfg.get("camera"+str(slot)) or "camera.tiny_liveboard_direct_"+str(slot)).replace(".", "_") for slot in (0,1) if cfg.get("capture"+str(slot)) == "yes"}
+        return bool(match and match.group(1) in cameras)
+    if msg["action"] != "list" and not allowed_file(msg.get("file")):
+        connection.send_error(msg["id"], "unauthorized", "Camera media not permitted")
+        return
     engine = hass.data[DOMAIN]["media"]
     try:
         if msg["action"] == "list":
             result = await hass.async_add_executor_job(engine.list_files)
+            result["items"] = [item for item in result["items"] if allowed_file(item["file"])]
         elif msg["action"] == "thumbnail":
             result = await engine.thumbnail(msg["file"])
         elif msg["action"] in ("lock", "unlock"):
