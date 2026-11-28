@@ -9,7 +9,7 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.helpers.storage import Store
 import voluptuous as vol
 
-from .news import NewsEngine, settings
+from .news import NewsEngine, settings, article_metadata
 from .alerts import AlertEngine
 from .radar import RadarEngine
 from .media import MediaEngine, configured_stream
@@ -100,6 +100,7 @@ async def async_setup_entry(hass, entry):
         websocket_api.async_register_command(hass, save_config)
         websocket_api.async_register_command(hass, get_news)
         websocket_api.async_register_command(hass, news_archive)
+        websocket_api.async_register_command(hass, news_article)
         websocket_api.async_register_command(hass, get_dmi)
         websocket_api.async_register_command(hass, radar_frames)
         websocket_api.async_register_command(hass, radar_tile)
@@ -154,6 +155,24 @@ async def save_config(hass, connection, msg):
         else:
             await data["alerts"].wis2.stop()
         connection.send_result(msg["id"], config)
+
+@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/news_article", vol.Required("url"): str})
+@websocket_api.async_response
+async def news_article(hass, connection, msg):
+    engine = hass.data[DOMAIN]["news"]
+    url = msg["url"]
+    item = next((x for group in engine.items.values() for x in group if x.get("url") and x["url"] == url), None)
+    if item is None:
+        connection.send_error(msg["id"], "not_found", "Article unavailable")
+        return
+    try:
+        async with engine.lock:
+            if "_metadata" not in item:
+                item["_metadata"] = await article_metadata(hass, url)
+            result = item["_metadata"]
+        connection.send_result(msg["id"], result)
+    except Exception:
+        connection.send_result(msg["id"], {})
 
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/news_archive", vol.Required("action"): vol.In(["list","save","delete"]), vol.Optional("url", default=""): str})
 @websocket_api.async_response
