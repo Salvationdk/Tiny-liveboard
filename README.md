@@ -99,3 +99,12 @@ additional hardware is required for the intended architecture.
 7. Maksimér kameraet for at se de tilladte optageknapper. Kontrollér adgang med den almindelige brugers login. Skærm-ID er ikke et adgangskodebeskyttet sikkerhedstoken. Profil- og medieadgang skal verificeres på den konkrete installation.
 
 Flere skærme kan have samme profil eller forskellige profiler. Eksempel: `{"kitchen":"Køkken","hall":"Entré"}`. Brug den almindelige HA-adresse uden parametre til administration. Skærmopsætningen er endnu ikke verificeret på alle HA-versioner.
+
+
+### Tiny News og Tiny Calendar
+
+Åbn Studio → Nyheder, vælg danske kilder efter kategori, og tilføj eventuelt egne HTTPS RSS/Atom-feeds med én linje pr. kilde: `Navn | https://eksempel.dk/feed`. Kilder baseret på Google News er søgefeeds og ikke nødvendigvis direkte udgiverfeeds.
+
+Tryk på en nyhed i tickeren for at åbne artikellæseren. Gem nyheden med gemmeknappen, og åbn Tiny Calendar via kalenderknappen i tickeren. Kalenderen bruger udgivelsesdatoen; hvis den mangler, bruges gemmedatoen med tydelig markering. Arkivet er personligt for den indloggede Home Assistant-bruger og gemmes på serveren (maks. 500 nyheder pr. bruger).
+
+Kalenderen kan filtreres efter måned, dato, tekst, kamera og hændelsestype. Kameraoptagelser, snapshots og bevægelseshistorik afhænger af brugerens medietilladelser. Nyhedsartikler vises kun med tekst, der er tilgængelig via feedet eller offentlig artikelmarkup. Ved betalingsmur, uigennemsigtigt Google News-link eller manglende artikelmarkup vises tilgængelig tekst og link til udgiveren. Komplet artikeltekst kan ikke garanteres for alle kilder. Kildestatus og praktisk artikelvisning skal kontrolleres på installationen.
