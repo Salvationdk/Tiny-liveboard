@@ -5,7 +5,7 @@ import logging
 import re
 import unicodedata
 from html.parser import HTMLParser
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin, urlsplit, quote_plus
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from defusedxml import ElementTree
@@ -21,6 +21,23 @@ SOURCES = {
     "Lokale medier": "https://news.google.com/rss/search?q=Kalundborg+%28site%3Asn.dk+OR+site%3Akalundborgnetavis.dk%29&hl=da&gl=DK&ceid=DK:da",
 }
 DEFAULT_SOURCES = list(SOURCES)[:4]
+# Google News discovery feeds, not publisher-operated RSS endpoints.
+for name, domain in {
+    "Ekstra Bladet": "ekstrabladet.dk", "B.T.": "bt.dk",
+    "Politiken": "politiken.dk", "Berlingske": "berlingske.dk",
+    "Jyllands-Posten": "jyllands-posten.dk", "Information": "information.dk",
+    "TV 2 Fyn": "tv2fyn.dk", "TV 2 Nord": "tv2nord.dk",
+    "TV 2 Østjylland": "tv2ostjylland.dk", "TV MIDTVEST": "tvmidtvest.dk",
+    "TV SYD": "tvsyd.dk", "SN.dk": "sn.dk", "Version2": "version2.dk",
+    "Ingeniøren": "ing.dk", "Computerworld": "computerworld.dk",
+    "Recordere.dk": "recordere.dk", "Videnskab.dk": "videnskab.dk",
+    "Politiet": "politi.dk", "Via Ritzau": "via.ritzau.dk",
+    "BeredskabsInfo": "beredskabsinfo.dk", "Danmarks Statistik": "dst.dk",
+}.items():
+    SOURCES[name] = "https://news.google.com/rss/search?q=" + quote_plus("site:" + domain) + "&hl=da&gl=DK&ceid=DK:da"
+for label, query in {"DR Politik":"politik","DR Indland":"indland","DR Udland":"udland","DR Viden":"viden"}.items():
+    SOURCES[label] = "https://news.google.com/rss/search?q=" + quote_plus("site:dr.dk/nyheder/" + query) + "&hl=da&gl=DK&ceid=DK:da"
+
 TTL = 300
 FAILURE_TTL = 60
 BREAKING_TTL = 3600
@@ -83,7 +100,13 @@ def parse_feed(payload):
         published = timestamp(item.findtext("pubDate") or item.findtext("published") or item.findtext("updated"))
         publisher = item.findtext("source") or ""
         body = news_text(item.findtext("encoded") or item.findtext("content") or item.findtext("description") or item.findtext("summary"))
-        items.append({"publisher": publisher[:100], "body": body, "title": title[:300], "breaking": bool(set(categories) & {"breaking news", "breaking"}), "published": published})
+        link = item.findtext("link") or next((n.get("href", "") for n in item.findall("link") if n.get("rel", "alternate") == "alternate"), "")
+        try:
+            u = urlsplit(link.strip())
+            link = link.strip()[:2048] if u.scheme in ("https", "http") and u.hostname and not u.username and not u.password else ""
+        except ValueError:
+            link = ""
+        items.append({"url": link, "publisher": publisher[:100], "body": body, "title": title[:300], "breaking": bool(set(categories) & {"breaking news", "breaking"}), "published": published})
     return items[:50]
 
 def settings(config):
