@@ -46,3 +46,10 @@ Udgangspunkt: `38e7d18`, version 0.1.18.
 Home Assistant Core 2025.6-smoketesten brugte rigtig runtime, WebSocket og lokal kalender. Miljøets netværksadapteropslag blev erstattet med loopback til testen. HACS-installation og eksterne tjenester afventer den praktiske test.
 
 Næste opgave: kør accepttesten i README på den faktiske vægskærm og med dens kamera- og vejrkilder.
+
+## 0.1.23 – kameradiagnostik og udvidet lokal kontrol
+
+- E, F og G blev gemt som `2acfbf5`.
+- `frontend/display.js` gør kameradiagnostik tilgængelig i kamerafokus. Optagestatus hentes kun, når knapperne vises. `frontend/camera.js` måler WebRTC-statistik, når signalpanelet er åbent.
+- Headless Chromium verificerede også træk og fortryd i Studio. Lokal HA Core 2025.6 verificerede nægtet medieadgang for en almindelig bruger samt beskyttet afspilning og HTTP Range med en FFmpeg-genereret testfil.
+- Afventer stadig målinger med faktiske kamerastreams, aktive varsler og den fysiske skærm.

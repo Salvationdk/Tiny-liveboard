@@ -13,7 +13,7 @@ HACS-konfigurationen angiver Home Assistant 2025.6 som minimum. FFmpeg skal vær
 
 ### Lovelace
 
-Tilføj JavaScript-modulressourcen `/tiny_liveboard/display.js?v=0.1.22`. Opret derefter et manuelt kort.
+Tilføj JavaScript-modulressourcen `/tiny_liveboard/display.js?v=0.1.23`. Opret derefter et manuelt kort.
 
 ```yaml
 type: custom:tiny-liveboard-card

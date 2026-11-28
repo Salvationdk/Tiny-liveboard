@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.23
+
+- Restored camera signal diagnostics in focused view. Recording status and WebRTC statistics are collected while their controls are visible.
+
 ## 0.1.22
 
 - Removed the legacy precipitation overlay and migrated the external weather setting for existing profiles.
