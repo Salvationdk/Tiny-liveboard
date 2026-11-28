@@ -160,6 +160,23 @@ class MediaEngine:
                     continue
         return count
 
+    def enforce_quota(self, max_bytes):
+        listing = self.list_files(None)
+        total = listing["bytes"]
+        removed = 0
+        for item in reversed(listing["items"]):
+            if total <= max_bytes:
+                break
+            if item["locked"]:
+                continue
+            try:
+                self.delete_file(item["kind"], item["file"])
+                total -= item["size"]
+                removed += 1
+            except (ValueError, OSError):
+                continue
+        return {"bytes": total, "removed": removed, "over_limit": total > max_bytes}
+
     def set_locked(self, kind, name, locked):
         with self.file_lock:
             if kind not in ("snapshots", "recordings") or not re.fullmatch(r"[a-zA-Z0-9_]+\.(jpg|png|mp4)", name):
