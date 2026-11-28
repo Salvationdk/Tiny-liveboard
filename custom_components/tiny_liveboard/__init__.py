@@ -121,7 +121,7 @@ async def async_setup_entry(hass, entry):
     entry.async_on_unload(async_track_time_interval(hass, cleanup_media, timedelta(hours=1)))
     if warnings_enabled(hass.data[DOMAIN]["config"]):
         hass.data[DOMAIN]["alerts"].wis2.start()
-    frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard-panel", "module_url": "/tiny_liveboard/display.js?v=0.1.17", "embed_iframe": False, "trust_external": False}}, require_admin=False)
+    frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard-panel", "module_url": "/tiny_liveboard/display.js?v=0.1.18", "embed_iframe": False, "trust_external": False}}, require_admin=False)
     return True
 
 async def async_unload_entry(hass, entry):
@@ -219,6 +219,9 @@ async def news_archive(hass, connection, msg):
                 saved_item["article_complete"] = bool(metadata.get("article"))
                 saved_item["image"] = metadata.get("image") or saved_item.get("image", "")
                 saved_item["original_url"] = metadata.get("url") or url
+                if saved_item.get("published") is None:
+                    saved_item["published"] = metadata.get("published")
+                saved_item["article_source"] = metadata.get("article_source", "rss")
                 entries.insert(0, {**saved_item, "id": key, "saved": time.time()})
         elif msg["action"] == "delete":
             entries = [x for x in entries if x["id"] != key]
