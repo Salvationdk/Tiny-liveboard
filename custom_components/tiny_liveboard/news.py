@@ -1,5 +1,8 @@
 """Bounded, independent RSS cache and conservative breaking-news policy."""
 import asyncio
+import aiohttp
+import socket
+import ipaddress
 import time
 import logging
 import re
@@ -109,11 +112,37 @@ def parse_feed(payload):
         items.append({"url": link, "publisher": publisher[:100], "body": body, "title": title[:300], "breaking": bool(set(categories) & {"breaking news", "breaking"}), "published": published})
     return items[:50]
 
+class PublicResolver(aiohttp.abc.AbstractResolver):
+    async def resolve(self, host, port=0, family=socket.AF_UNSPEC):
+        records = await asyncio.get_running_loop().getaddrinfo(host, port, family=family, type=socket.SOCK_STREAM)
+        if not records or any(not ipaddress.ip_address(r[4][0]).is_global for r in records):
+            raise ValueError("Non-public feed address")
+        return [{"hostname":host,"host":r[4][0],"port":port,"family":r[0],"proto":r[2],"flags":socket.AI_NUMERICHOST} for r in records]
+    async def close(self):
+        pass
+
+def custom_sources(config):
+    result = {}
+    for line in str(config.get("customNewsFeeds", "")).splitlines()[:20]:
+        name, sep, url = line.partition("|")
+        name, url = name.strip(), url.strip()
+        try:
+            u = urlsplit(url)
+            if not sep or not name or len(name)>80 or len(url)>2048 or u.scheme!="https" or not u.hostname or u.username or u.password or u.port not in (None,443):
+                continue
+            try:
+                ipaddress.ip_address(u.hostname)
+            except ValueError:
+                result["Egen: "+name] = url
+        except ValueError:
+            continue
+    return result
+
 def settings(config):
     sources = config.get("sources", DEFAULT_SOURCES)
     if not isinstance(sources, list):
         sources = DEFAULT_SOURCES
-    return [name for name in SOURCES if name in sources]
+    return {**{name: SOURCES[name] for name in SOURCES if name in sources}, **custom_sources(config)}
 
 class NewsEngine:
     def __init__(self, hass):
@@ -121,13 +150,21 @@ class NewsEngine:
         self.items = {}
         self.updated = {}
         self.status = {}
+        self.urls = {}
         self.lock = asyncio.Lock()
 
     async def get(self, selected=None):
-        selected = DEFAULT_SOURCES if selected is None else [s for s in SOURCES if s in selected]
+        selected = {s:SOURCES[s] for s in DEFAULT_SOURCES} if selected is None else selected
+        if not isinstance(selected, dict):
+            selected = {s:SOURCES[s] for s in selected if s in SOURCES}
         async with self.lock:
             now = time.monotonic()
-            await asyncio.gather(*(self.fetch(name, SOURCES[name]) for name in selected
+            for name, url in selected.items():
+                if self.urls.get(name) != url:
+                    self.items.pop(name, None)
+                    self.updated.pop(name, None)
+                    self.urls[name] = url
+            await asyncio.gather(*(self.fetch(name, selected[name]) for name in selected
                                    if now - self.updated.get(name, -TTL) >= (TTL if self.status.get(name, {}).get("ok", True) else FAILURE_TTL)))
             return self.combined(selected)
 
@@ -154,8 +191,7 @@ class NewsEngine:
     async def fetch(self, name, url):
         self.updated[name] = time.monotonic()
         try:
-            session = async_get_clientsession(self.hass)
-            async with asyncio.timeout(15):
+            async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(resolver=PublicResolver(), use_dns_cache=False), trust_env=False) as session, asyncio.timeout(15):
                 for redirect in range(4):
                     async with session.get(url, allow_redirects=False) as response:
                         if response.status in (301,302,303,307,308):
@@ -254,6 +290,14 @@ PUBLIC_ARTICLE_DOMAINS = frozenset(("dr.dk","politi.dk","dst.dk"))
 async def article_metadata(hass, url):
     # Only explicitly trusted public publisher hosts; never follow redirects.
     u = urlsplit(url)
+    if u.scheme == "https" and u.hostname == "news.google.com" and not u.username and not u.password and u.port in (None,443):
+        session = async_get_clientsession(hass)
+        async with asyncio.timeout(8):
+            async with session.get(url, allow_redirects=False) as response:
+                if response.status not in (301,302,303,307,308):
+                    return {}
+                url = urljoin(url, response.headers.get("Location", ""))
+        u = urlsplit(url)
     domain = (u.hostname or "").removeprefix("www.")
     if domain == "nyheder.tv2.dk":
         domain = "tv2.dk"
@@ -276,4 +320,5 @@ async def article_metadata(hass, url):
     parsed = urlsplit(image)
     result["image"] = image if parsed.scheme == "https" and parsed.hostname and not parsed.username and not parsed.password else ""
     result.pop("explicit_free", None)
+    result["url"] = url
     return result
