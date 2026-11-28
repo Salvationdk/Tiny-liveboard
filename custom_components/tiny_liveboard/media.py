@@ -6,11 +6,12 @@ import re
 import threading
 import tempfile
 import logging
-_LOGGER = logging.getLogger(__name__)
 from urllib.parse import urlsplit
 from pathlib import Path
 from datetime import datetime, timezone
 from uuid import uuid4
+
+_LOGGER = logging.getLogger(__name__)
 
 MEDIA_FILENAME = re.compile(r"[a-zA-Z0-9_]{1,230}\.(jpg|png|mp4)")
 MEDIA_KINDS = ("snapshots", "recordings")
@@ -32,6 +33,7 @@ class MediaEngine:
         self.file_lock = threading.RLock()
         self.lock = asyncio.Lock()
         self.snapshot_slots = asyncio.Semaphore(2)
+        self.thumbnail_slots = asyncio.Semaphore(1)
 
     def migrate(self):
         """Move existing captures out of the shared Home Assistant media source."""
@@ -132,15 +134,20 @@ class MediaEngine:
             with self.file_lock:
                 self.jobs[entity] = (proc, path)
                 self.started[entity] = time.monotonic()
-            self.hass.async_create_task(self.watch(entity, proc, path))
+            self.hass.async_create_task(self.watch(entity, proc, path, minutes))
             try:
                 await self.save_preroll(entity, path)
             except Exception:
                 _LOGGER.warning('Pre-recording export failed; keeping main recording', exc_info=True)
             return {"recording": True, "file": path.name}
 
-    async def watch(self, entity, proc, path):
-        await proc.wait()
+    async def watch(self, entity, proc, path, minutes):
+        try:
+            await asyncio.wait_for(proc.wait(), minutes * 60 + 30)
+        except TimeoutError:
+            if self.jobs.get(entity, (None,))[0] is proc:
+                await self.stop(entity)
+            return
         async with self.lock:
             if self.jobs.get(entity, (None,))[0] is proc:
                 try:
@@ -356,6 +363,12 @@ class MediaEngine:
                 self.finalizing.difference_update((path.name, pre.name))
 
     async def thumbnail(self, name):
+        if self.thumbnail_slots.locked():
+            raise ValueError("Thumbnail worker busy")
+        async with self.thumbnail_slots:
+            return await self._thumbnail(name)
+
+    async def _thumbnail(self, name):
         if not re.fullmatch(r"[a-zA-Z0-9_]+\.mp4", name):
             raise ValueError("Invalid recording")
         source = await self.hass.async_add_executor_job(self.playback_file, "recordings", name)

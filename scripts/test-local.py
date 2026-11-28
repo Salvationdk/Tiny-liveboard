@@ -15,7 +15,7 @@ def run(label, args, data=None):
 
 results = {}
 results["Python syntax"] = run("Python syntax", [sys.executable, "-m", "compileall", "-q", "custom_components", "tests"])
-results["Python tests"] = run("Python tests", [sys.executable, "-m", "unittest", "discover", "-s", "tests"])
+results["Python tests"] = run("Python tests", [sys.executable, "-m", "pytest", "-q", "tests"])
 for file in sorted((root / "custom_components/tiny_liveboard/frontend").glob("*.js")):
     label = "JS syntax: " + file.name
     results[label] = run(label, [node, "--input-type=module", "--check"], file.read_bytes())

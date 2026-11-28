@@ -5,7 +5,8 @@ import re
 from zoneinfo import ZoneInfo
 
 from homeassistant.auth.permissions.const import POLICY_READ
-from homeassistant.core import Context
+from homeassistant.components.calendar import CalendarEntity
+from homeassistant.components.calendar.const import DATA_COMPONENT
 
 MAX_CALENDARS = 8
 MAX_EVENTS = 300
@@ -24,6 +25,10 @@ def configured_calendars(config):
 
 def normalize_event(event, entity, zone):
     def parse(value):
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=zone)
+        if isinstance(value, date):
+            return datetime.combine(value, time.min, zone)
         if DATE.fullmatch(value):
             return datetime.combine(date.fromisoformat(value), time.min, zone)
         result = datetime.fromisoformat(value)
@@ -33,7 +38,7 @@ def normalize_event(event, entity, zone):
     start_time, end_time = parse(start), parse(end)
     if end_time.timestamp() <= start_time.timestamp():
         raise ValueError("Invalid calendar interval")
-    all_day = bool(DATE.fullmatch(start))
+    all_day = (isinstance(start, date) and not isinstance(start, datetime)) or (isinstance(start, str) and bool(DATE.fullmatch(start)))
     first_day = start_time.astimezone(zone).date()
     last_day = (end_time.astimezone(timezone.utc) - timedelta(microseconds=1)).astimezone(zone).date()
     return {
@@ -71,33 +76,38 @@ class Agenda:
             cached = self.cache.get(key)
             if cached and now < cached[0]:
                 return cached[1]
-            result = await self._query(user.id, entities, zone, start, end)
+            result = await self._query(entities, zone, start, end)
             self.cache = {k: v for k, v in self.cache.items() if v[0] > now and k != key}
             if len(self.cache) >= 32:
                 self.cache.pop(next(iter(self.cache)))
             self.cache[key] = (asyncio.get_running_loop().time() + (30 if result["unavailable"] else 120), result)
             return result
 
-    async def _query(self, user_id, entities, zone, start, end):
-        if not self.hass.services.has_service("calendar", "get_events"):
+    async def _query(self, entities, zone, start, end):
+        component = self.hass.data.get(DATA_COMPONENT)
+        if component is None:
             return {"items": [], "unavailable": True}
+        start_at = datetime.combine(start, time.min, zone)
+        end_at = datetime.combine(end, time.min, zone)
 
         async def read(entity):
+            calendar = component.get_entity(entity)
+            if not isinstance(calendar, CalendarEntity) or not calendar.available:
+                return None
             try:
-                response = await asyncio.wait_for(self.hass.services.async_call(
-                    "calendar", "get_events",
-                    {"entity_id": entity, "start_date_time": datetime.combine(start, time.min, zone).isoformat(),
-                     "end_date_time": datetime.combine(end, time.min, zone).isoformat()},
-                    blocking=True, return_response=True, context=Context(user_id=user_id),
-                ), timeout=10)
-                events = response[entity]["events"]
+                events = await asyncio.wait_for(
+                    calendar.async_get_events(self.hass, start_at, end_at), timeout=10,
+                )
             except Exception:
                 return None
             result = []
             for event in events[:MAX_EVENTS]:
                 try:
-                    result.append(normalize_event(event, entity, zone))
-                except (KeyError, ValueError, TypeError, OverflowError):
+                    result.append(normalize_event({
+                        "start": event.start, "end": event.end, "summary": event.summary,
+                        "location": event.location,
+                    }, entity, zone))
+                except (AttributeError, ValueError, TypeError, OverflowError):
                     continue
             return result
 

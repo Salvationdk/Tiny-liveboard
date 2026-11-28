@@ -88,7 +88,7 @@ def news_text(value):
     parser.feed((value or "")[:40000])
     return "\n".join(" ".join(line.split()) for line in "".join(parser.parts).splitlines() if line.strip())[:12000]
 
-def parse_feed(payload):
+def parse_feed(payload, base_url=""):
     root = ElementTree.fromstring(payload)
     for node in root.iter():
         node.tag = node.tag.rsplit("}", 1)[-1]
@@ -106,21 +106,46 @@ def parse_feed(payload):
         publisher = item.findtext("source/name") or item.findtext("source/title") or item.findtext("source") or ""
         body = news_text(item.findtext("encoded") or item.findtext("content") or item.findtext("description") or item.findtext("summary"))
         link = item.findtext("link") or next((n.get("href", "") for n in item.findall("link") if n.get("rel", "alternate") == "alternate"), "")
+        link = urljoin(base_url, link.strip()) if link.strip() else ""
         try:
             u = urlsplit(link.strip())
             link = link.strip() if len(link.strip()) <= 2048 and u.scheme in ("https", "http") and u.hostname and not u.username and not u.password else ""
         except ValueError:
             link = ""
         image = next((n.get("url", "") for n in item.iter() if n.tag in ("thumbnail", "enclosure", "content") and (n.tag == "thumbnail" or (n.get("type") or "").startswith("image/") or n.get("medium") == "image")), "")
-        if not image.startswith("https://") or len(image) > 2048:
-            image = ""
+        image = public_url(urljoin(base_url, image)) if image else ""
         items.append({"image": image, "url": link, "publisher": publisher[:100], "body": body, "title": title[:300], "breaking": bool(set(categories) & {"breaking news", "breaking"}), "published": published})
     return items[:50]
+
+def public_url(value):
+    """Accept public HTTPS URLs without credentials or unusual ports."""
+    if not isinstance(value, str) or len(value) > 2048 or any(ord(c) < 33 for c in value):
+        return ""
+    try:
+        url = urlsplit(value)
+        host = url.hostname
+        if url.scheme != "https" or not host or url.username or url.password or url.port not in (None, 443):
+            return ""
+        if "." not in host or host.rstrip(".").endswith((".local", ".localhost", ".internal", ".home.arpa")):
+            return ""
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            return value
+    except ValueError:
+        pass
+    return ""
+
+
+def routable(address):
+    ip = ipaddress.ip_address(address)
+    return ip.is_global and not ip.is_multicast and not ip.is_reserved
+
 
 class PublicResolver(aiohttp.abc.AbstractResolver):
     async def resolve(self, host, port=0, family=socket.AF_UNSPEC):
         records = await asyncio.get_running_loop().getaddrinfo(host, port, family=family, type=socket.SOCK_STREAM)
-        if not records or any(not ipaddress.ip_address(r[4][0]).is_global for r in records):
+        if not records or any(not routable(r[4][0]) for r in records):
             raise ValueError("Non-public feed address")
         return [{"hostname":host,"host":r[4][0],"port":port,"family":r[0],"proto":r[2],"flags":socket.AI_NUMERICHOST} for r in records]
     async def close(self):
@@ -131,16 +156,8 @@ def custom_sources(config):
     for line in str(config.get("customNewsFeeds", "")).splitlines()[:20]:
         name, sep, url = line.partition("|")
         name, url = name.strip(), url.strip()
-        try:
-            u = urlsplit(url)
-            if not sep or not name or len(name)>80 or len(url)>2048 or u.scheme!="https" or not u.hostname or u.username or u.password or u.port not in (None,443):
-                continue
-            try:
-                ipaddress.ip_address(u.hostname)
-            except ValueError:
-                result["Egen: "+name+" · "+hashlib.sha256(url.encode()).hexdigest()[:10]] = url
-        except ValueError:
-            continue
+        if sep and name and len(name) <= 80 and public_url(url):
+            result["Egen: " + name + " · " + hashlib.sha256(url.encode()).hexdigest()[:10]] = url
     return result
 
 def settings(config):
@@ -157,6 +174,8 @@ class NewsEngine:
         self.status = {}
         self.urls = {}
         self.lock = asyncio.Lock()
+        self.fetch_slots = asyncio.Semaphore(8)
+        self.metadata_slots = asyncio.Semaphore(4)
 
     def find(self, url, selected):
         return next((item for name in selected for item in self.items.get(name, []) if item.get("url") == url and url), None)
@@ -203,10 +222,23 @@ class NewsEngine:
                 seen.add(key)
                 if url:
                     seen_urls.add(url)
-                result.append(dict(item, breaking=bool(self.status.get(source, {}).get("ok", True) and item["breaking"] and item["published"] is not None and 0 <= age <= BREAKING_TTL)))
+                public = {key: value for key, value in item.items() if key != "_metadata"}
+                result.append(dict(public, breaking=bool(self.status.get(source, {}).get("ok", True) and item["breaking"] and item["published"] is not None and 0 <= age <= BREAKING_TTL)))
         return sorted(result, key=lambda item: (not item["breaking"], -(item["published"] if item["published"] is not None else item["received"])))[:60]
 
+    async def metadata(self, item, selected):
+        if "_metadata" in item:
+            return item["_metadata"]
+        async with self.metadata_slots:
+            if "_metadata" not in item:
+                item["_metadata"] = await article_metadata(self.hass, item["url"], selected.values())
+        return item["_metadata"]
+
     async def fetch(self, name, url):
+        async with self.fetch_slots:
+            await self._fetch(name, url)
+
+    async def _fetch(self, name, url):
         self.updated[name] = time.monotonic()
         try:
             async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(resolver=PublicResolver(), use_dns_cache=False), trust_env=False) as session, asyncio.timeout(15):
@@ -215,12 +247,13 @@ class NewsEngine:
                         if response.status in (301,302,303,307,308):
                             target = urljoin(url, response.headers.get("Location", ""))
                             old, new = urlsplit(url), urlsplit(target)
-                            if new.scheme != "https" or new.hostname != old.hostname or new.username or new.password or new.port not in (None,443):
+                            if not public_url(target) or new.hostname != old.hostname or target == url:
                                 raise ValueError("Unsafe feed redirect")
                             url = target
                             continue
                         if response.status != 200:
                             raise ValueError(f"HTTP {response.status}")
+                        content_type = response.content_type
                         chunks = bytearray()
                         async for chunk in response.content.iter_chunked(16384):
                             chunks.extend(chunk)
@@ -229,12 +262,13 @@ class NewsEngine:
                         break
                 else:
                     raise ValueError("Too many feed redirects")
-            parsed = await self.hass.async_add_executor_job(parse_feed, bytes(chunks))
+            parser = parse_html_source if content_type in ("text/html", "application/xhtml+xml") else parse_feed
+            parsed = await self.hass.async_add_executor_job(parser, bytes(chunks), url)
             previous = {item["title"]: item for item in self.items.get(name, [])}
             self.items[name] = [dict(item, source=name.split(" · ")[0] if name.startswith("Egen: ") else name, received=previous.get(item["title"], {}).get("received", time.time())) for item in parsed]
             self.status[name] = {"ok": True, "count": len(parsed), "checked": time.time(), "last_success": time.time()}
         except Exception as exc:
-            self.status[name] = {"ok": False, "checked": time.time(), "error": str(exc)[:160] or type(exc).__name__, "last_success": self.status.get(name, {}).get("last_success"), "cached_count": len(self.items.get(name, []))}
+            self.status[name] = {"ok": False, "checked": time.time(), "error": str(exc)[:100] if type(exc) is ValueError else type(exc).__name__, "last_success": self.status.get(name, {}).get("last_success"), "cached_count": len(self.items.get(name, []))}
             _LOGGER.debug("News source %s unavailable: %s", name, type(exc).__name__)
 
 class ArticleMetadata(HTMLParser):
@@ -277,7 +311,7 @@ class ArticleMetadata(HTMLParser):
         if tag != "meta":
             return
         key = a.get("property") or a.get("name")
-        if key in ("og:description", "description", "twitter:description", "og:image", "article:published_time"):
+        if key in ("og:description", "description", "twitter:description", "og:image", "og:title", "og:site_name", "article:published_time"):
             self.values.setdefault(key, a.get("content", "")[:4000])
 
     def handle_data(self, data):
@@ -319,7 +353,7 @@ def article_nodes(documents):
             kinds = [kinds] if isinstance(kinds, str) else kinds
             if isinstance(kinds, list) and any(k in ("Article", "NewsArticle", "ReportageNewsArticle", "BlogPosting", "AnalysisNewsArticle") for k in kinds):
                 yield node
-            for key in ("@graph", "mainEntity", "hasPart"):
+            for key in ("@graph", "mainEntity", "hasPart", "itemListElement", "item"):
                 if key in node:
                     pending.append(node[key])
 
@@ -341,7 +375,13 @@ def parse_article_metadata(payload):
     published = timestamp(parser.values.get("article:published_time"))
     visible = "\n\n".join(dict.fromkeys(parser.paragraphs))[:40000]
     candidates = [(visible, "html")]
+    title = parser.values.get("og:title", "")
+    publisher = parser.values.get("og:site_name", "")
     for n in nodes:
+        if not title and isinstance(n.get("headline"), str):
+            title = n["headline"]
+        if not publisher and isinstance(n.get("publisher"), dict) and isinstance(n["publisher"].get("name"), str):
+            publisher = n["publisher"]["name"]
         if not description and isinstance(n.get("description"), str):
             description = news_text(n["description"])
         if published is None and isinstance(n.get("datePublished"), str):
@@ -357,13 +397,61 @@ def parse_article_metadata(payload):
         if not restricted and access(n.get("isAccessibleForFree")) == "true" and isinstance(n.get("articleBody"), str):
             candidates.append((news_text(n["articleBody"]), "json-ld"))
     article, source = max(candidates, key=lambda pair: len(pair[0]))
-    return {"body": description, "article": "" if restricted else article, "image": image, "published": published, "explicit_free": explicit_free, "article_source": source if article and not restricted else "summary"}
+    return {"title": news_text(title)[:300], "publisher": news_text(publisher)[:100], "body": description, "article": "" if restricted else article, "image": image, "published": published, "explicit_free": explicit_free, "article_source": source if article and not restricted else "summary"}
+
+def parse_html_source(payload, base_url):
+    """Read published metadata from an article or a structured article listing."""
+    parser = ArticleMetadata()
+    parser.feed(payload.decode("utf-8", errors="replace"))
+    items = []
+    for node in article_nodes(parser.ld_documents):
+        title = node.get("headline") or node.get("name")
+        link = node.get("url") or node.get("mainEntityOfPage") or node.get("@id")
+        if isinstance(link, dict):
+            link = link.get("@id") or link.get("url")
+        if not isinstance(title, str) or not isinstance(link, str):
+            continue
+        url = public_url(urljoin(base_url, link))
+        if not url or urlsplit(url).hostname != urlsplit(base_url).hostname:
+            continue
+        description = node.get("description")
+        image = node.get("image")
+        if isinstance(image, list):
+            image = next(iter(image), "")
+        if isinstance(image, dict):
+            image = image.get("url") or image.get("contentUrl")
+        publisher = node.get("publisher")
+        publisher = publisher.get("name", "") if isinstance(publisher, dict) else ""
+        published = node.get("datePublished")
+        items.append({
+            "title": news_text(title)[:300], "url": url,
+            "image": public_url(urljoin(base_url, image)) if isinstance(image, str) and image else "",
+            "body": news_text(description) if isinstance(description, str) else "",
+            "publisher": news_text(publisher)[:100] if isinstance(publisher, str) else "",
+            "published": timestamp(published) if isinstance(published, str) else None,
+            "breaking": False,
+        })
+        if len(items) >= 50:
+            break
+    if not items:
+        metadata = parse_article_metadata(payload)
+        if not metadata["title"] or metadata["published"] is None:
+            raise ValueError("No structured article data")
+        items.append({
+            "title": metadata["title"], "url": base_url, "body": metadata["body"],
+            "image": public_url(urljoin(base_url, metadata["image"])) if metadata["image"] else "",
+            "publisher": metadata["publisher"], "published": metadata["published"], "breaking": False,
+        })
+    return items
+
 
 ARTICLE_DOMAINS = frozenset(("dr.dk","tv2.dk","tv2east.dk","tv2fyn.dk","tv2nord.dk","tv2ostjylland.dk","tvmidtvest.dk","tvsyd.dk","videnskab.dk","politi.dk","dst.dk","via.ritzau.dk","ekstrabladet.dk","bt.dk","politiken.dk","berlingske.dk","jyllands-posten.dk","information.dk","sn.dk","version2.dk","ing.dk","computerworld.dk","recordere.dk","beredskabsinfo.dk"))
 PUBLIC_ARTICLE_DOMAINS = frozenset(("dr.dk","politi.dk","dst.dk"))
 
-async def article_metadata(hass, url):
-    # Only explicitly trusted public publisher hosts; never follow redirects.
+async def article_metadata(hass, url, sources=()):
+    if not public_url(url):
+        return {}
+    allowed = ARTICLE_DOMAINS | {(urlsplit(source).hostname or "").removeprefix("www.") for source in sources if public_url(source)}
     u = urlsplit(url)
     # Older Google News IDs contain a literal publisher URL. Do not use
     # undocumented RPCs, authentication or subscription bypasses.
@@ -389,7 +477,7 @@ async def article_metadata(hass, url):
     domain = (u.hostname or "").removeprefix("www.")
     if domain == "nyheder.tv2.dk":
         domain = "tv2.dk"
-    if u.scheme != "https" or domain not in ARTICLE_DOMAINS or u.username or u.password or u.port not in (None, 443):
+    if u.scheme != "https" or domain not in allowed or not public_url(url):
         return {}
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(resolver=PublicResolver(), use_dns_cache=False), trust_env=False) as session, asyncio.timeout(10):
         for _ in range(5):
@@ -400,7 +488,7 @@ async def article_metadata(hass, url):
                     target_domain = (parsed.hostname or "").removeprefix("www.")
                     if target_domain == "nyheder.tv2.dk":
                         target_domain = "tv2.dk"
-                    if parsed.scheme != "https" or target_domain != domain or parsed.username or parsed.password or parsed.port not in (None,443):
+                    if not public_url(target) or target_domain != domain or target == url:
                         return {}
                     url = target
                     continue
@@ -418,8 +506,7 @@ async def article_metadata(hass, url):
     if domain not in PUBLIC_ARTICLE_DOMAINS and not result.get("explicit_free"):
         result.pop("article", None)
     image = urljoin(url, result.get("image") or "") if result.get("image") else ""
-    parsed = urlsplit(image)
-    result["image"] = image if parsed.scheme == "https" and parsed.hostname and not parsed.username and not parsed.password else ""
+    result["image"] = public_url(image)
     result.pop("explicit_free", None)
     result["url"] = url
     return result

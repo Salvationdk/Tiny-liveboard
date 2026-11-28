@@ -1,24 +1,29 @@
-from pathlib import Path
-from datetime import date, timedelta
-from homeassistant.helpers.event import async_track_time_interval
+"""Home Assistant setup, configuration and WebSocket API for Tiny LiveBoard."""
 import asyncio
+import logging
 import secrets
-from aiohttp import web
 import time
+from datetime import date, timedelta
+from functools import wraps
+from pathlib import Path
+
+from aiohttp import web
+import voluptuous as vol
+
 from homeassistant.auth.permissions.const import POLICY_READ
 from homeassistant.components import frontend, websocket_api
 from homeassistant.components.http import HomeAssistantView, StaticPathConfig
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
-import voluptuous as vol
 
 from .agenda import Agenda
-from .news import NewsEngine, settings, article_metadata
+from .news import NewsEngine, settings
 from .alerts import AlertEngine
-from .radar import RadarEngine
 from .media import MediaEngine, configured_stream
 from .motion import MotionEngine
 
 DOMAIN = "tiny_liveboard"
+_LOGGER = logging.getLogger(__name__)
 
 def validate_layout(config):
     import math
@@ -164,7 +169,7 @@ class PlaybackView(HomeAssistantView):
 
     async def get(self, request, token):
         data = self.hass.data.get(DOMAIN)
-        if not data:
+        if not data or data.get("closing"):
             raise web.HTTPNotFound()
         grant = data["playback"].get(token)
         if not grant or grant[0] < time.monotonic():
@@ -179,12 +184,31 @@ class PlaybackView(HomeAssistantView):
                                                "Referrer-Policy": "no-referrer"})
 
 
+def migrate_config(config):
+    """Remove retired weather settings from saved dashboards and imports."""
+    config = dict(config)
+    if "externalRadar" in config:
+        config.setdefault("externalWeather", config.pop("externalRadar"))
+    config.pop("radarEntity", None)
+    if isinstance(config.get("profiles"), dict):
+        config["profiles"] = {name: migrate_config(value) if isinstance(value, dict) else value
+                              for name, value in config["profiles"].items()}
+    return config
+
+
 async def async_setup_entry(hass, entry):
     store = Store(hass, 1, DOMAIN)
-    hass.data[DOMAIN] = {"media": MediaEngine(hass), "news": NewsEngine(hass), "agenda": Agenda(hass), "archive": Store(hass, 1, DOMAIN + ".news_archive"), "archive_lock": asyncio.Lock(), "alerts": AlertEngine(hass), "radar": RadarEngine(hass), "store": store, "save_lock": asyncio.Lock(), "screens_live": {}, "config": {**entry.data, **(await store.async_load() or {})}}
+    stored = await store.async_load() or {}
+    config = migrate_config({**entry.data, **stored})
+    if stored and migrate_config(stored) != stored:
+        await store.async_save(config)
+    hass.data[DOMAIN] = {"media": MediaEngine(hass), "news": NewsEngine(hass), "agenda": Agenda(hass), "archive": Store(hass, 1, DOMAIN + ".news_archive"), "archive_lock": asyncio.Lock(), "alerts": AlertEngine(hass), "store": store, "save_lock": asyncio.Lock(), "screens_live": {}, "config": config}
     data = hass.data[DOMAIN]
     data["playback"] = {}
-    await hass.async_add_executor_job(data["media"].migrate)
+    try:
+        await hass.async_add_executor_job(data["media"].migrate)
+    except (ValueError, OSError):
+        _LOGGER.warning("Could not move all legacy camera media into private storage")
     data["motion"] = MotionEngine(hass, data["media"])
     await data["motion"].configure(data["config"])
     if not hass.data.get(DOMAIN + "_registered"):
@@ -200,16 +224,15 @@ async def async_setup_entry(hass, entry):
         websocket_api.async_register_command(hass, news_article)
         websocket_api.async_register_command(hass, calendar_events)
         websocket_api.async_register_command(hass, get_dmi)
-        websocket_api.async_register_command(hass, radar_frames)
-        websocket_api.async_register_command(hass, radar_tile)
         websocket_api.async_register_command(hass, screen_heartbeat)
         websocket_api.async_register_command(hass, screen_status)
         hass.data[DOMAIN + "_registered"] = True
     async def cleanup_media(now):
-        data = hass.data[DOMAIN]
+        if data.get("closing"):
+            return
         try:
-            days = int(data["config"].get("captureRetention", 0) or 0)
-            quota = float(data["config"].get("captureQuotaGB", 0) or 0)
+            days = int(data["config"].get("captureRetention", 30) or 30)
+            quota = float(data["config"].get("captureQuotaGB", 5) or 5)
         except (ValueError, TypeError):
             return
         if 1 <= days <= 365:
@@ -219,24 +242,51 @@ async def async_setup_entry(hass, entry):
     entry.async_on_unload(async_track_time_interval(hass, cleanup_media, timedelta(hours=1)))
     if warnings_enabled(hass.data[DOMAIN]["config"]):
         hass.data[DOMAIN]["alerts"].wis2.start()
-    frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard-panel", "module_url": "/tiny_liveboard/display.js?v=0.1.21", "embed_iframe": False, "trust_external": False}}, require_admin=False)
+    frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard-panel", "module_url": "/tiny_liveboard/display.js?v=0.1.22", "embed_iframe": False, "trust_external": False}}, require_admin=False)
     return True
 
 async def async_unload_entry(hass, entry):
-    await hass.data[DOMAIN]["motion"].close()
-    await hass.data[DOMAIN]["media"].close()
-    await hass.data[DOMAIN]["alerts"].wis2.stop()
+    data = hass.data[DOMAIN]
+    data["closing"] = True
     frontend.async_remove_panel(hass, "tiny-liveboard")
+    pending = [task for task in data.get("requests", ()) if not task.done()]
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    async with data["save_lock"]:
+        await data["motion"].close()
+        await data["media"].close()
+        await data["alerts"].wis2.stop()
+    data["playback"].clear()
+    hass.data.pop(DOMAIN, None)
     return True
 
+
+def active_response(handler):
+    @wraps(handler)
+    async def respond(hass, connection, msg):
+        data = hass.data.get(DOMAIN)
+        if not data or data.get("closing"):
+            connection.send_error(msg["id"], "unavailable", "Tiny LiveBoard is starting or reloading")
+            return
+        requests = data.setdefault("requests", set())
+        task = asyncio.current_task()
+        requests.add(task)
+        try:
+            await handler(hass, connection, msg)
+        finally:
+            requests.discard(task)
+    return websocket_api.async_response(respond)
+
+
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/get"})
-@websocket_api.async_response
+@active_response
 async def get_config(hass, connection, msg):
     connection.send_result(msg["id"], view_config(hass.data[DOMAIN]["config"], connection.user))
 
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/save", vol.Required("config"): dict, vol.Required("expected_revision"): vol.All(int, vol.Range(min=0))})
 @websocket_api.require_admin
-@websocket_api.async_response
+@active_response
 async def save_config(hass, connection, msg):
     data = hass.data[DOMAIN]
     async with data["save_lock"]:
@@ -244,17 +294,21 @@ async def save_config(hass, connection, msg):
         if msg["expected_revision"] != revision:
             connection.send_error(msg["id"], "conflict", "Configuration changed; reopen Studio")
             return
-        config = dict(msg["config"], _revision=revision + 1)
+        config = migrate_config(dict(msg["config"], _revision=revision + 1))
         try:
             validate_screen_config(config)
         except (ValueError, TypeError, OverflowError) as err:
             connection.send_error(msg["id"], "invalid_config", str(err))
             return
+        previous = data["config"]
         await data["store"].async_save(config)
         data["config"] = config
         data["playback"].clear()
-        await data["motion"].configure(config)
-        data["news"].updated.clear()
+        if any(previous.get(key) != config.get(key) for key in previous.keys() | config.keys()
+               if key.startswith(("motion", "camera", "captureRtsp"))):
+            await data["motion"].configure(config)
+        if settings(previous) != settings(config) or previous.get("profiles") != config.get("profiles"):
+            data["news"].updated.clear()
         if warnings_enabled(config):
             data["alerts"].wis2.start()
         else:
@@ -267,7 +321,7 @@ async def save_config(hass, connection, msg):
     vol.Required("start"): vol.Match(r"^\d{4}-\d{2}-\d{2}$"),
     vol.Required("end"): vol.Match(r"^\d{4}-\d{2}-\d{2}$"),
 })
-@websocket_api.async_response
+@active_response
 async def calendar_events(hass, connection, msg):
     data = hass.data[DOMAIN]
     config = request_config(hass, connection, msg)
@@ -285,28 +339,26 @@ async def calendar_events(hass, connection, msg):
 
 
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/news_article", vol.Required("url"): str, vol.Optional("profile", default=""): vol.All(str, vol.Length(max=64))})
-@websocket_api.async_response
+@active_response
 async def news_article(hass, connection, msg):
     engine = hass.data[DOMAIN]["news"]
     url = msg["url"]
     config = request_config(hass, connection, msg)
     if config is None:
         return
-    item = engine.find(url, settings(config))
+    selected = settings(config)
+    item = engine.find(url, selected)
     if item is None:
         connection.send_error(msg["id"], "not_found", "Article unavailable")
         return
     try:
-        async with engine.lock:
-            if "_metadata" not in item:
-                item["_metadata"] = await article_metadata(hass, url)
-            result = item["_metadata"]
+        result = await engine.metadata(item, selected)
         connection.send_result(msg["id"], result)
     except Exception:
         connection.send_result(msg["id"], {})
 
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/news_archive", vol.Optional("profile", default=""): vol.All(str, vol.Length(max=64)), vol.Required("action"): vol.In(["list","save","delete"]), vol.Optional("url", default=""): str})
-@websocket_api.async_response
+@active_response
 async def news_archive(hass, connection, msg):
     import hashlib
     uid = connection.user.id
@@ -321,7 +373,8 @@ async def news_archive(hass, connection, msg):
         url = msg["url"]
         key = hashlib.sha256(url.encode()).hexdigest()
         if msg["action"] == "save":
-            item = data["news"].find(url, settings(config))
+            selected = settings(config)
+            item = data["news"].find(url, selected)
             if item is None:
                 connection.send_error(msg["id"], "not_found", "Article is no longer in feed cache")
                 return
@@ -329,18 +382,15 @@ async def news_archive(hass, connection, msg):
                 if len(entries) >= 500:
                     connection.send_error(msg["id"], "limit", "Archive limit reached (500)")
                     return
-                metadata = item.get("_metadata")
-                if metadata is None:
-                    try:
-                        async with data["news"].lock:
-                            metadata = item.get("_metadata")
-                            if metadata is None:
-                                metadata = await article_metadata(hass, url)
-                                item["_metadata"] = metadata
-                    except Exception:
-                        metadata = {}
+                try:
+                    metadata = await data["news"].metadata(item, selected)
+                except Exception:
+                    metadata = {}
                 saved_item = {k: v for k, v in item.items() if k != "_metadata"}
                 metadata = metadata or {}
+                for field in ("title", "publisher"):
+                    if metadata.get(field):
+                        saved_item[field] = metadata[field]
                 content = metadata.get("article") or metadata.get("body") or ""
                 if len(content) > len(saved_item.get("body") or ""):
                     saved_item["body"] = content
@@ -371,7 +421,7 @@ async def news_archive(hass, connection, msg):
         connection.send_result(msg["id"], {"items": entries})
 
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/news", vol.Optional("profile", default=""): vol.All(str, vol.Length(max=64))})
-@websocket_api.async_response
+@active_response
 async def get_news(hass, connection, msg):
     data = hass.data[DOMAIN]
     config = request_config(hass, connection, msg)
@@ -382,7 +432,7 @@ async def get_news(hass, connection, msg):
     connection.send_result(msg["id"], {"items": items, "status": {name: data["news"].status[name] for name in selected if name in data["news"].status}})
 
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/dmi", vol.Optional("profile", default=""): vol.All(str, vol.Length(max=64))})
-@websocket_api.async_response
+@active_response
 async def get_dmi(hass, connection, msg):
     data = hass.data[DOMAIN]
     config = request_config(hass, connection, msg)
@@ -393,28 +443,8 @@ async def get_dmi(hass, connection, msg):
         return
     connection.send_result(msg["id"], await data["alerts"].get())
 
-@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/radar_frames", vol.Optional("profile", default=""): vol.All(str, vol.Length(max=64))})
-@websocket_api.async_response
-async def radar_frames(hass, connection, msg):
-    try:
-        data=hass.data[DOMAIN]
-        if not profile_config(data["config"],msg["profile"]).get("externalRadar"): raise ValueError("Disabled")
-        connection.send_result(msg["id"], await data["radar"].list())
-    except Exception as exc:
-        connection.send_error(msg["id"],"radar_unavailable","DMI radar unavailable: "+str(exc)[:160])
-
-@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/radar_tile", vol.Optional("profile", default=""): vol.All(str, vol.Length(max=64)),vol.Required("frame"):str,vol.Required("z"):vol.All(int,vol.Range(min=3,max=9)),vol.Required("x"):vol.All(int,vol.Range(min=0,max=511)),vol.Required("y"):vol.All(int,vol.Range(min=0,max=511))})
-@websocket_api.async_response
-async def radar_tile(hass, connection, msg):
-    try:
-        data=hass.data[DOMAIN]
-        if not profile_config(data["config"],msg["profile"]).get("externalRadar"): raise ValueError("Disabled")
-        connection.send_result(msg["id"],await data["radar"].tile(msg["frame"],msg["z"],msg["x"],msg["y"]))
-    except Exception as exc:
-        connection.send_error(msg["id"],"radar_unavailable","DMI radar tile unavailable: "+str(exc)[:160])
-
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/screen_heartbeat",vol.Required("screen"):vol.Match(r"^[a-zA-Z0-9_-]{1,64}$"),vol.Required("profile"):vol.All(str,vol.Length(max=64)),vol.Required("visible"):bool,vol.Required("revision"):vol.All(int,vol.Range(min=0))})
-@websocket_api.async_response
+@active_response
 async def screen_heartbeat(hass, connection, msg):
     data=hass.data[DOMAIN]
     assigned = data["config"].get("screens", {}).get(msg["screen"])
@@ -432,7 +462,7 @@ async def screen_heartbeat(hass, connection, msg):
 
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/screen_status"})
 @websocket_api.require_admin
-@websocket_api.async_response
+@active_response
 async def screen_status(hass, connection, msg):
     data=hass.data[DOMAIN]
     now=time.time()
@@ -444,7 +474,7 @@ async def screen_status(hass, connection, msg):
     connection.send_result(msg["id"],result)
 
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/camera_media", vol.Required("action"): vol.In(("snapshot","start","stop","status")), vol.Required("entity"): vol.Match(r"^camera\.[a-z0-9_]+$"), vol.Optional("slot"): vol.In((0,1)), vol.Optional("profile", default=""): vol.All(str, vol.Length(max=64)), vol.Optional("minutes", default=30): vol.All(int,vol.Range(min=1,max=60))})
-@websocket_api.async_response
+@active_response
 async def camera_media(hass, connection, msg):
     engine = hass.data[DOMAIN]["media"]
     entity = msg["entity"]
@@ -480,7 +510,7 @@ async def camera_media(hass, connection, msg):
         connection.send_error(msg["id"], "media_failed", "Camera media operation failed; verify camera stream, FFmpeg and media storage")
 
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/media_gallery", vol.Optional("profile", default=""): vol.All(str, vol.Length(max=64)), vol.Required("action"): vol.In(("list","delete","resolve","lock","unlock","thumbnail")), vol.Optional("kind"): vol.In(("snapshots","recordings")), vol.Optional("file"): vol.Match(r"^[a-zA-Z0-9_]+\.(jpg|png|mp4)$")})
-@websocket_api.async_response
+@active_response
 async def media_gallery(hass, connection, msg):
     cfg = request_config(hass, connection, msg)
     if cfg is None:
@@ -531,7 +561,7 @@ async def media_gallery(hass, connection, msg):
         connection.send_error(msg["id"], "media_failed", "Media operation failed")
 
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/motion_history", vol.Optional("profile", default=""): vol.All(str, vol.Length(max=64))})
-@websocket_api.async_response
+@active_response
 async def motion_history(hass, connection, msg):
     history = list(reversed(hass.data[DOMAIN]["motion"].history))
     cfg = request_config(hass, connection, msg)

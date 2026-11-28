@@ -1,27 +1,21 @@
 # Changelog
 
-## 1.0.0 — Unreleased
+## 0.1.22
 
-### Added
-- Landscape wall display with two camera streams, weather and news ticker.
-- Camera focus transitions, stream recovery and diagnostics.
-- Weather forecasts, advice, radar, lightning, wind and pollen views.
-- DMI observations and experimental ODIM radar decoding; external fallback sources.
-- MeteoAlarm Atom and experimental WIS2 warning ingestion.
-- Studio layout editing, layers, widgets, Lovelace cards and configuration backups.
-- Named profiles, per-screen assignments, weekday schedules and kiosk controls.
-- Central browser presence monitoring.
-- Local Python and JavaScript regression test runner and synthetic fixtures.
+- Removed the legacy precipitation overlay and migrated the external weather setting for existing profiles.
+- Added public HTML article metadata support, bounded news fetches and corrected weather and warning freshness handling.
+- Tightened media, configuration and WebSocket lifecycle management.
 
-### Changed
-- Revision-checked configuration persistence and server-side geometry validation.
-- Improved responsive layout, accessibility and offline news handling.
+## 0.1.21
 
-### Release gates
-- Run local regression suites and resolve failures.
-- Verify supported Home Assistant versions and dependency installation.
-- Verify live DMI, WIS2, news and camera endpoints.
-- Verify Studio save, restore, undo, profile transitions and kiosk recovery.
-- Verify HACS installation and upgrade on a real Home Assistant instance.
+- Added per-profile Home Assistant access checks and filtered client configuration.
+- Moved camera captures into private storage with expiring playback grants. Added direct RTSP support to motion and prebuffer.
 
-The 1.0.0 version is not released until these checks are complete.
+## 0.1.20
+
+- Reused the dashboard renderer for Studio live preview and stored themes centrally.
+- Centered the 16:9 dashboard in the available viewport.
+
+## 0.1.19
+
+- Added Home Assistant calendar events in Tiny Calendar, bounded archive storage and used publisher publication dates.

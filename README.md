@@ -1,110 +1,77 @@
 # Tiny LiveBoard
 
-Early development build for Home Assistant. Add this repository to HACS as Integration, install, restart, then add Tiny LiveBoard in Settings > Devices & services. Open the sidebar panel and select entities in Studio.
+Tiny LiveBoard is a Home Assistant integration for a 16:9 wall display. The sidebar panel and optional Lovelace card use the same saved configuration and renderer. Studio is available to administrators from the unprofiled sidebar panel.
 
-Camera playback uses direct go2rtc WebSocket signaling (experimental). Configure ws://host/api/ws?src=stream or wss:// for HTTPS dashboards. Use a trusted private network; do not expose unauthenticated go2rtc publicly. Camera entity selection is retained but does not yet resolve stream URLs automatically. DR RSS retrieval with five-minute cache and explicit breaking categories is implemented; feed availability and category support are not yet verified. Radar, drag-and-drop and weather intelligence are not implemented. Not yet validated on Home Assistant.
+## Installation og opdatering
 
-News sources: DR, TV 2, TV2 ØST and Google News search for Kalundborg. Select sources in Studio. Regional and local endpoints need live validation.
+1. Tilføj dette repository i HACS som en brugerdefineret integration, og installér den ønskede version. Ved manuel installation kopieres hele `custom_components/tiny_liveboard` til Home Assistants `config/custom_components`.
+2. Genstart Home Assistant. Gå til **Indstillinger → Enheder og tjenester → Tilføj integration → Tiny LiveBoard**. Vælg eksisterende kamera- og vejrentiteter, hvis de skal konfigureres med det samme.
+3. Åbn **Tiny LiveBoard** i sidebjælken med en administratorbruger. Tryk **Studio**. Brug **Gem** nederst i Studio efter ændringer.
+4. Efter opdatering af en manuel installation, genstart Home Assistant og genindlæs vægskærmens browser. Ved opdatering fra en tidligere version flyttes registreringer i den tidligere delte mediemappe til privat lagring, når filsystemet tillader det. Hvis en fil ikke flyttes, viser Home Assistant en advarsel i loggen.
 
-## News engine
-RSS/Atom, independent five-minute fetch caches, 48-hour article retention, one-hour breaking expiry (explicit categories and valid publication date required), source diagnostics and Studio ticker colors/speed. TV2 ØST and local media use Google News queries; direct feed availability and live integration remain to be verified. Undated articles expire 48 hours after first observation within a running instance.
+HACS-konfigurationen angiver Home Assistant 2025.6 som minimum. FFmpeg skal være installeret i samme miljø som Home Assistant for direkte RTSP, optagelse, bevægelsesanalyse og videominiaturer.
 
-### Existing go2rtc
-Enter the existing server's HTTP(S) base address in Studio, click discovery and select named streams. Browser discovery requires reachable API and CORS permission; HTTPS panels require HTTPS/WSS. Preview each stream before saving. No go2rtc configuration is changed. Manual WebSocket URL remains an alternative. Direct peer connectivity and browser codec support must be tested on the target display.
+### Lovelace
 
-### Tiny Weather Engine
-Native animated weather panel with hourly/daily forecasts via Home Assistant weather.get_forecasts, temperature and precipitation graphs, wind and sun tabs. Missing data are not fabricated. Radar, official alerts, independent moon calculations and weather intelligence remain pending. Provider support varies.
-
-Weather extensions: approximate lunar phase, forecast-based everyday advice, rain/snow scenes and themes, selectable HA camera entities for radar/wind imagery and sensor entities for warnings/pollen. These are adapters, not independent radar or official warning providers; animated radar timelines and geographic wind maps require a suitable provider. Advice is not a safety guarantee.
-
-Weather visual polish: scalable SVG weather artwork, translucent forecast surfaces, compact screen rules, and opt-in RainViewer historical radar tile playback. Radar is a regional tile without a geographic basemap; external availability, terms and browser CORS must be verified. No coordinates are sent unless external radar is enabled and opened. Official DMI warnings still require a configured HA sensor.
-
-Weather completion increment: opt-in OSM raster basemap with home marker and RainViewer overlay; local forecast wind direction timeline; approximate NOAA-style solar calculations; experimental DMI RSS adapter (endpoint not verified, no claim of warning coverage). Geographic wind field still requires a camera provider. External map services receive tile coordinates only when enabled. Verify provider terms before production deployment.
-
-Animated SVG weather artwork is shared by current, hourly and daily forecasts; reduced-motion preferences disable icon animation. DMI official warnings remain unverified; consult https://www.dmi.dk/varsler directly.
-
-Forecast refresh tracks hourly and daily successes independently. Failed requests retry after one minute; cached data is explicitly labelled stale after a failure or fifteen minutes without a successful refresh.
-
-### Weather warnings
-Optional Danish MeteoAlarm Atom feed: https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-denmark (EUMETNET / national meteorological service). Updates are cached for five minutes. Polygon geometry is filtered against Home Assistant coordinates when supplied; area-name-only warnings remain geographically unverified. Always consult https://www.dmi.dk/varsler for official guidance. See https://meteoalarm.org/en/live/page/terms-and-conditions for reuse terms. The feed is not a safety-critical notification service.
-
-
-## Lovelace dashboard card
-
-With the integration installed and loaded, add a dashboard resource of type JavaScript module: `/tiny_liveboard/display.js`. Then add a manual card:
+Tilføj JavaScript-modulressourcen `/tiny_liveboard/display.js?v=0.1.22`. Opret derefter et manuelt kort.
 
 ```yaml
 type: custom:tiny-liveboard-card
 height: 480
+profile: Køkken
 ```
 
-Height is in pixels (240–2400). The card shares the integration's saved Studio configuration with the sidebar panel. Admin users can edit that shared configuration. Each mounted card opens its own camera streams; avoid unnecessary duplicate cards. Browser reload may be needed after adding the resource.
+Højde angives i pixels fra 240 til 2400. `profile` er valgfri. Brug én aktiv visning af samme kamera pr. skærm, når videoforbruget skal holdes nede.
 
+## Studio og skærmprofiler
 
-## Central screen management
+- **Layout** har flytning, størrelsesændring, lag, synlighed, fortryd og gentag. Hold Shift for et grovere gitter. Forhåndsvisningen bruger dashboardets renderer og viser de aktuelle entitetstilstande. Kamerafelter repræsenteres af navn og billedformat. Brug **Forhåndsvis** under kameraopsætningen til en rigtig kameratest.
+- **Design** indeholder temaer, farver og vejrikoner. Gem et tema i det centrale bibliotek og indlæs det i et andet layout eller en anden profil. Tryk **Gem** nederst for at gemme biblioteket på serveren.
+- **Skærmprofiler** gemmer layout og indstillinger under et navn. Tildel et skærm-ID, fx `kitchen`, og åbn `/tiny-liveboard?screen=kitchen` på skærmen. Tidsplaner bruger Home Assistants tidszone, understøtter intervaller over midnat og vælger den første regel, der passer. En tilladt eksplicit profil kan vælges med `?profile=Køkken`.
+- Angiv de tilladte Home Assistant-bruger-ID’er på hver profil, som skal have begrænset adgang. Et tomt felt tillader alle aktive HA-brugere. Sidebjælkens standardkonfiguration kan tildeles på samme måde. Brug en almindelig Home Assistant-bruger på vægskærmen.
+- **Kiosk** skjuler LiveBoards værktøjslinje på skærmen. Fuldskærm styres af browseren og kræver normalt et tryk. Home Assistant-menuen og enhedens strømstyring håndteres via klienten eller operativsystemet.
+- **Diagnostik** viser skærmenes seneste livstegn. En skærm markeres offline efter 90 sekunder. Studio kan eksportere og importere konfigurationsbackup. Backup fra en administrator kan indeholde private adresser og legitimationsoplysninger og skal opbevares privat.
 
-Open the Tiny LiveBoard sidebar panel as an administrator to configure Studio.
-Create named profiles, then assign screen IDs in the screen assignment field,
-for example `{"kitchen":"Day","livingroom":"Evening"}`.
-Open `/tiny-liveboard?screen=kitchen` on the corresponding display.
-Use the visual schedule editor to select a profile, weekdays and start/end
-times. Overnight intervals are supported; the first matching rule wins.
-The default assigned profile is restored outside scheduled intervals.
-Explicit `?profile=NAME` overrides screen schedules.
+## Nyheder og Tiny Calendar
 
-Kiosk mode hides LiveBoard's own toolbar, not the Home Assistant shell or
-operating-system controls. Use the unprofiled sidebar panel for administration.
-Screen presence is reported every 30 seconds; a 90-second timeout marks a
-screen offline. This measures browser connectivity, not hardware power.
-Presence records are reset on integration restart.
+Under **Studio → Nyheder** kan du vælge danske kilder og tilføje egne med `Navn | https://eksempel.dk/feed` pr. linje. RSS, Atom og offentlige HTML-sider med struktureret artikelmetadata understøttes. Google News-kilder kan levere links uden synlig udgiveradresse. Artikler åbnes fra tickeren. Den tilgængelige beskrivelse og udgiverens link bruges, hvis siden kræver abonnement eller mangler åbne artikeldata. Breaking kræver en eksplicit kategori i feedet og en gyldig, aktuel udgivelsesdato.
 
-## Weather data sources
+Gem en artikel i læseren og åbn kalenderikonet i tickeren. Arkivet er personligt. Det bruger udgivelsesdatoen eller en markeret gemmedato. Arkivet har højst 500 gemte artikler pr. bruger og et fælles lagringsbudget på ca. 32 MiB. Ved overskridelse fjernes de ældste gemninger først. Du kan også fjerne artikler manuelt.
 
-External weather maps are opt-in. The regional wind map prefers recent DMI
-station observations with matching station IDs and observation times.
-Missing points use Open-Meteo model data when available. These are different
-data types, not interchangeable measurements. Wind arrows indicate movement.
-Radar attempts DMI ODIM decoding and falls back to RainViewer when unavailable.
-MeteoAlarm Atom and WIS2 provide warning information. A missing feed or missing
-geometry must not be interpreted as an official all-clear.
-External map services receive regional location information.
+Vælg op til otte HA-kalenderentiteter i Studio. Tiny Calendar viser en måned ad gangen i Home Assistants tidszone. Vælg en dag eller blad mellem måneder. Heldagsaftaler vises på alle de dage, aftalen dækker, og slutter ved den eksklusive slutdato. De valgte kalendere kræver HA-læseadgang. En kalenderfejl vises særskilt fra en tom kalender.
 
-## Local development and verification
+## Kameraer, bevægelse og medier
 
-Install Python and Node.js, then install the Python dependencies required by
-the integration manifest and its tests (including numpy, Pillow and defusedxml).
-From the repository root run:
+HA-kameraentiteter er den anbefalede afspilningsvej for vægskærme. Ved eksisterende go2rtc kan administratoren angive serveren og vælge en stream. Til HTTPS skal go2rtc være tilgængelig via HTTPS/WSS. Discovery kræver browseradgang og CORS. go2rtc's egen adgang skal konfigureres hos udbyderen.
+
+RTSP(S) bruges på serveren til optagelse og bevægelsesanalyse. Brug en HA-kameraentitet eller go2rtc til at vise selve streamen i browseren. Bevægelse kan komme fra billedanalyse eller en HA-binærsensor. Prebuffer på op til 30 sekunder bruger FFmpeg og kræver en fungerende stream. Arkivet gemmer snapshot- og optagelsesfilernes tid, størrelse og låsestatus. Låste filer er undtaget oprydning. Standardoprydning kører hver time med 30 dages opbevaring og 5 GiB kvote.
+
+Galleriet kontrollerer profilens tilladelser og HA-kameraadgang. Afspilningslinks er tidsbegrænsede og filspecifikke. Del dem kun med brugere, der må se optagelsen.
+
+## Vejr og varsler
+
+Home Assistant leverer aktuelle vejrforhold og de time- og døgnprognoser, som den valgte vejrplatform tilbyder. I Studio kan du desuden aktivere eksterne vejrdata og kort. DMI leverer stationsobservationer, Open-Meteo leverer modellens vind og pollen, og OpenStreetMap leverer kortbaggrunden. Kilderne får regionale koordinater, når de relevante visninger åbnes.
+
+DMI-varsler kan aktiveres via MeteoAlarm. WIS2 og Atom har separate forbindelsesstatusser. Lokale varsler filtreres på gyldig geometri. Varsler uden verificerbart område vises med den usikkerhed; ved en feedfejl kan der stadig blive vist cachede, gyldige varsler. Brug [DMI's officielle varsler](https://www.dmi.dk/varsler) for den aktuelle officielle visning.
+
+## Lokal kontrol
+
+Installér Python, Node.js og de deklarerede Python-pakker samt pytest. Kør fra roden:
 
 ```sh
 python scripts/test-local.py
 ```
 
-This runner performs local syntax checks and regression tests without dispatching
-GitHub Actions. Synthetic radar and CAP fixtures do not verify live service
-availability or compatibility with actual DMI files. Before a production release,
-verify installation on the target Home Assistant version, real camera streams,
-DMI radar and wind data, WIS2 connectivity, news feeds, profile transitions,
-Studio persistence and the physical display layout. No external MQTT broker or
-additional hardware is required for the intended architecture.
+### Praktisk accepttest i Home Assistant
 
+| Område | Test | Forventet resultat |
+|---|---|---|
+| Installation | Opdatér fra 0.1.18 på en testinstallation og genstart | Sidebar og tidligere dashboard åbner. Tidligere skærmprofiler og layout kan indlæses. |
+| A | Vælg et fungerende RSS-/Atom-feed og en struktureret HTML-kilde. Gem en artikel, genstart, og find den på udgivelsesdatoen. Vælg en kalender med en heldagsaftale og en tidsbestemt aftale omkring et tidszoneskift. | Arkivet bevarer artiklen. Kalenderen viser korrekt lokaldato og eksklusiv slutdato. Fejl på én kalender er synlig. |
+| B | Flyt og skalér felter, brug Shift, skift lag, fortryd, anvend tema og gem. Genindlæs med to skærmopløsninger. | Preview og dashboard viser samme layout og tema. 16:9-fladen er centreret og scrollbar-fri. |
+| C | Opret to profiler med hver sin adgang, en plan over midnat og en almindelig bruger. Prøv begge webadresser og gem et profil-eksport/import-forløb. Afbryd og genetablér forbindelsen. | Brugeren ser tilladte profiler, og skærmen skifter efter planen. Dashboardet genoptager opdatering. |
+| D | Vis HA- og go2rtc-kamera, afbryd streamen, og genetablér den. Optag via bevægelse med prebuffer. Afspil og søg i optagelsen, test galleritilladelser og oprydning. | Streamen kommer tilbage. Optagelsen bevares på tværs af genstart, og afspilning kræver gyldig adgang. |
+| E | Brug aktuel HA-vejrentitet, DMI-observationer, vindkort og MeteoAlarm/WIS2. Afbryd en kilde. | Datakilde, aktualitet og kildefejl fremgår. Sammenlign aktive varsler med DMI. |
+| F–G | Lad den fysiske skærm køre et døgn. Genindlæs integrationen og browseren under testen. Kontroller CPU, diskplads og antal videoforbindelser før og efter. | Dashboardet genoptager drift, og antal forbindelser stiger ikke for hver genindlæsning. |
 
-## Opsætning af anden bruger, tablet eller vægpanel (dansk)
-
-1. Opret en almindelig Home Assistant-bruger under Indstillinger → Personer → Brugere. Undgå administratorlogin på delte skærme.
-2. Åbn Tiny LiveBoard fra sidebjælken som administrator, uden skærmparameter. Konfigurér kameraer, vejr, layout og design i Studio.
-3. Under **Medier og adgang** vælges brugerens ID (brugervælger eller manuel indtastning), relevante kameraers capture-indstilling og de nødvendige tilladelser: snapshot, optagelse, galleri, afspilning, sletning og låsning. Giv mindst mulige rettigheder.
-4. Under **Skærmprofiler** oprettes et profilnavn, fx Køkken. Tryk Gem profil. Tildel skærm-ID i feltet Skærm-ID → profil, fx `{"kitchen":"Køkken"}`. Tryk derefter Gem nederst i Studio.
-5. Log ind som den almindelige bruger på tabletten og åbn `https://DIN-HA-ADRESSE/tiny-liveboard?screen=kitchen` (brug din faktiske HA-adresse og port). Studio har en adressegenerator.
-6. Aktivér eventuelt kiosk i profilen. Kiosk skjuler Tiny LiveBoards værktøjer, ikke nødvendigvis HA-menuen. Brug Diagnostik til at kontrollere skærmstatus.
-7. Maksimér kameraet for at se de tilladte optageknapper. Kontrollér adgang med den almindelige brugers login. Skærm-ID er ikke et adgangskodebeskyttet sikkerhedstoken. Profil- og medieadgang skal verificeres på den konkrete installation.
-
-Flere skærme kan have samme profil eller forskellige profiler. Eksempel: `{"kitchen":"Køkken","hall":"Entré"}`. Brug den almindelige HA-adresse uden parametre til administration. Skærmopsætningen er endnu ikke verificeret på alle HA-versioner.
-
-
-### Tiny News og Tiny Calendar
-
-Åbn Studio → Nyheder, vælg danske kilder efter kategori, og tilføj eventuelt egne HTTPS RSS/Atom-feeds med én linje pr. kilde: `Navn | https://eksempel.dk/feed`. Kilder baseret på Google News er søgefeeds og ikke nødvendigvis direkte udgiverfeeds.
-
-Tryk på en nyhed i tickeren for at åbne artikellæseren. Gem nyheden med gemmeknappen, og åbn Tiny Calendar via kalenderknappen i tickeren. Kalenderen bruger udgivelsesdatoen; hvis den mangler, bruges gemmedatoen med tydelig markering. Arkivet er personligt for den indloggede Home Assistant-bruger og gemmes på serveren (maks. 500 nyheder pr. bruger).
-
-Kalenderen kan filtreres efter måned, dato, tekst, kamera og hændelsestype. Kameraoptagelser, snapshots og bevægelseshistorik afhænger af brugerens medietilladelser. Nyhedsartikler vises kun med tekst, der er tilgængelig via feedet eller offentlig artikelmarkup. Ved betalingsmur, uigennemsigtigt Google News-link eller manglende artikelmarkup vises tilgængelig tekst og link til udgiveren. Komplet artikeltekst kan ikke garanteres for alle kilder. Kildestatus og praktisk artikelvisning skal kontrolleres på installationen.
+Ved fejlsøgning skal du kontrollere **Indstillinger → System → Logfiler** og Studio → Diagnostik. Tjek HA-brugerens entitetsadgang, skærm-ID og profilnavn, hvis et dashboard mangler indhold. Ved videofejl kontrolleres stream fra samme klient, TLS, FFmpeg og plads på konfigurationsdisken.
