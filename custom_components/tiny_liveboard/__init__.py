@@ -121,7 +121,7 @@ async def async_setup_entry(hass, entry):
     entry.async_on_unload(async_track_time_interval(hass, cleanup_media, timedelta(hours=1)))
     if warnings_enabled(hass.data[DOMAIN]["config"]):
         hass.data[DOMAIN]["alerts"].wis2.start()
-    frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard-panel", "module_url": "/tiny_liveboard/display.js?v=0.1.16", "embed_iframe": False, "trust_external": False}}, require_admin=False)
+    frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard-panel", "module_url": "/tiny_liveboard/display.js?v=0.1.17", "embed_iframe": False, "trust_external": False}}, require_admin=False)
     return True
 
 async def async_unload_entry(hass, entry):
@@ -162,12 +162,12 @@ async def save_config(hass, connection, msg):
             await data["alerts"].wis2.stop()
         connection.send_result(msg["id"], config)
 
-@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/news_article", vol.Required("url"): str})
+@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/news_article", vol.Required("url"): str, vol.Optional("profile", default=""): str})
 @websocket_api.async_response
 async def news_article(hass, connection, msg):
     engine = hass.data[DOMAIN]["news"]
     url = msg["url"]
-    item = next((x for group in engine.items.values() for x in group if x.get("url") and x["url"] == url), None)
+    item = engine.find(url, settings(profile_config(hass.data[DOMAIN]["config"], msg["profile"])))
     if item is None:
         connection.send_error(msg["id"], "not_found", "Article unavailable")
         return
@@ -180,7 +180,7 @@ async def news_article(hass, connection, msg):
     except Exception:
         connection.send_result(msg["id"], {})
 
-@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/news_archive", vol.Required("action"): vol.In(["list","save","delete"]), vol.Optional("url", default=""): str})
+@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/news_archive", vol.Optional("profile", default=""): str, vol.Required("action"): vol.In(["list","save","delete"]), vol.Optional("url", default=""): str})
 @websocket_api.async_response
 async def news_archive(hass, connection, msg):
     import hashlib
@@ -193,7 +193,7 @@ async def news_archive(hass, connection, msg):
         url = msg["url"]
         key = hashlib.sha256(url.encode()).hexdigest()
         if msg["action"] == "save":
-            item = next((x for group in data["news"].items.values() for x in group if x.get("url") and x["url"] == url), None)
+            item = data["news"].find(url, settings(profile_config(data["config"], msg["profile"])))
             if item is None:
                 connection.send_error(msg["id"], "not_found", "Article is no longer in feed cache")
                 return
