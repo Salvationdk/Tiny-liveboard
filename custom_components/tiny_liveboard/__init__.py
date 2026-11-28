@@ -113,7 +113,7 @@ async def async_setup_entry(hass, entry):
     entry.async_on_unload(async_track_time_interval(hass, cleanup_media, timedelta(hours=1)))
     if warnings_enabled(hass.data[DOMAIN]["config"]):
         hass.data[DOMAIN]["alerts"].wis2.start()
-    frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard-panel", "module_url": "/tiny_liveboard/display.js?v=0.1.9", "embed_iframe": False, "trust_external": False}}, require_admin=False)
+    frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard-panel", "module_url": "/tiny_liveboard/display.js?v=0.1.10", "embed_iframe": False, "trust_external": False}}, require_admin=False)
     return True
 
 async def async_unload_entry(hass, entry):
@@ -254,10 +254,16 @@ async def camera_media(hass, connection, msg):
     except Exception:
         connection.send_error(msg["id"], "media_failed", "Camera media operation failed; verify camera stream, FFmpeg and media storage")
 
-@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/media_gallery", vol.Required("action"): vol.In(("list","delete","resolve","lock","unlock","thumbnail")), vol.Optional("kind"): vol.In(("snapshots","recordings")), vol.Optional("file"): vol.Match(r"^[a-zA-Z0-9_]+\.(jpg|png|mp4)$")})
-@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/media_gallery", vol.Optional("profile", default=""): str, vol.Required("action"): vol.In(("list","delete","resolve","lock","unlock","thumbnail")), vol.Optional("kind"): vol.In(("snapshots","recordings")), vol.Optional("file"): vol.Match(r"^[a-zA-Z0-9_]+\.(jpg|png|mp4)$")})
 @websocket_api.async_response
 async def media_gallery(hass, connection, msg):
+    if not connection.user.is_admin:
+        cfg = profile_config(hass.data[DOMAIN]["config"], msg["profile"])
+        allowed = [x.strip() for x in str(cfg.get("captureUsers","")).split(",")]
+        permission = {"list":"captureAllowGallery","resolve":"captureAllowPlayback","thumbnail":"captureAllowPlayback","delete":"captureAllowDelete","lock":"captureAllowLock","unlock":"captureAllowLock"}[msg["action"]]
+        if connection.user.id not in allowed or cfg.get("captureAllowGallery") != "yes" or cfg.get(permission) != "yes":
+            connection.send_error(msg["id"], "unauthorized", "Media gallery action not permitted")
+            return
     engine = hass.data[DOMAIN]["media"]
     try:
         if msg["action"] == "list":
