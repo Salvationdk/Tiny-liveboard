@@ -1,6 +1,7 @@
 """Bounded, independent RSS cache and conservative breaking-news policy."""
 import asyncio
 import aiohttp
+import hashlib
 import socket
 import ipaddress
 import time
@@ -133,7 +134,7 @@ def custom_sources(config):
             try:
                 ipaddress.ip_address(u.hostname)
             except ValueError:
-                result["Egen: "+name] = url
+                result["Egen: "+name+" · "+hashlib.sha256(url.encode()).hexdigest()[:10]] = url
         except ValueError:
             continue
     return result
@@ -213,7 +214,7 @@ class NewsEngine:
                     raise ValueError("Too many feed redirects")
             parsed = await self.hass.async_add_executor_job(parse_feed, bytes(chunks))
             previous = {item["title"]: item["received"] for item in self.items.get(name, [])}
-            self.items[name] = [dict(item, source=name, received=previous.get(item["title"], time.time())) for item in parsed]
+            self.items[name] = [dict(item, source=name.split(" · ")[0] if name.startswith("Egen: ") else name, received=previous.get(item["title"], time.time())) for item in parsed]
             self.status[name] = {"ok": True, "count": len(parsed), "checked": time.time(), "last_success": time.time()}
         except Exception as exc:
             self.status[name] = {"ok": False, "checked": time.time(), "error": str(exc)[:160] or type(exc).__name__, "last_success": self.status.get(name, {}).get("last_success"), "cached_count": len(self.items.get(name, []))}
@@ -291,8 +292,7 @@ async def article_metadata(hass, url):
     # Only explicitly trusted public publisher hosts; never follow redirects.
     u = urlsplit(url)
     if u.scheme == "https" and u.hostname == "news.google.com" and not u.username and not u.password and u.port in (None,443):
-        session = async_get_clientsession(hass)
-        async with asyncio.timeout(8):
+        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(resolver=PublicResolver(), use_dns_cache=False), trust_env=False) as session, asyncio.timeout(8):
             async with session.get(url, allow_redirects=False) as response:
                 if response.status not in (301,302,303,307,308):
                     return {}
@@ -303,16 +303,15 @@ async def article_metadata(hass, url):
         domain = "tv2.dk"
     if u.scheme != "https" or domain not in ARTICLE_DOMAINS or u.username or u.password or u.port not in (None, 443):
         return {}
-    session = async_get_clientsession(hass)
-    async with asyncio.timeout(10):
+    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(resolver=PublicResolver(), use_dns_cache=False), trust_env=False) as session, asyncio.timeout(10):
         async with session.get(url, allow_redirects=False) as response:
             if response.status != 200 or "text/html" not in response.headers.get("Content-Type", ""):
                 return {}
             chunks = bytearray()
             async for chunk in response.content.iter_chunked(16384):
                 chunks.extend(chunk)
-                if len(chunks) >= MAX_BYTES:
-                    break
+                if len(chunks) > MAX_BYTES:
+                    return {}
     result = await hass.async_add_executor_job(parse_article_metadata, bytes(chunks))
     if domain not in PUBLIC_ARTICLE_DOMAINS and not result.get("explicit_free"):
         result.pop("article", None)
