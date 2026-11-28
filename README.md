@@ -86,3 +86,16 @@ verify installation on the target Home Assistant version, real camera streams,
 DMI radar and wind data, WIS2 connectivity, news feeds, profile transitions,
 Studio persistence and the physical display layout. No external MQTT broker or
 additional hardware is required for the intended architecture.
+
+
+## Opsætning af anden bruger, tablet eller vægpanel (dansk)
+
+1. Opret en almindelig Home Assistant-bruger under Indstillinger → Personer → Brugere. Undgå administratorlogin på delte skærme.
+2. Åbn Tiny LiveBoard fra sidebjælken som administrator, uden skærmparameter. Konfigurér kameraer, vejr, layout og design i Studio.
+3. Under **Medier og adgang** vælges brugerens ID (brugervælger eller manuel indtastning), relevante kameraers capture-indstilling og de nødvendige tilladelser: snapshot, optagelse, galleri, afspilning, sletning og låsning. Giv mindst mulige rettigheder.
+4. Under **Skærmprofiler** oprettes et profilnavn, fx Køkken. Tryk Gem profil. Tildel skærm-ID i feltet Skærm-ID → profil, fx `{"kitchen":"Køkken"}`. Tryk derefter Gem nederst i Studio.
+5. Log ind som den almindelige bruger på tabletten og åbn `https://DIN-HA-ADRESSE/tiny-liveboard?screen=kitchen` (brug din faktiske HA-adresse og port). Studio har en adressegenerator.
+6. Aktivér eventuelt kiosk i profilen. Kiosk skjuler Tiny LiveBoards værktøjer, ikke nødvendigvis HA-menuen. Brug Diagnostik til at kontrollere skærmstatus.
+7. Maksimér kameraet for at se de tilladte optageknapper. Kontrollér adgang med den almindelige brugers login. Skærm-ID er ikke et adgangskodebeskyttet sikkerhedstoken. Profil- og medieadgang skal verificeres på den konkrete installation.
+
+Flere skærme kan have samme profil eller forskellige profiler. Eksempel: `{"kitchen":"Køkken","hall":"Entré"}`. Brug den almindelige HA-adresse uden parametre til administration. Skærmopsætningen er endnu ikke verificeret på alle HA-versioner.
