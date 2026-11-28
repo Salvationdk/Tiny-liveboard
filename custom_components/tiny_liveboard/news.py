@@ -187,19 +187,45 @@ class ArticleMetadata(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.values = {}
+        self.article_depth = 0
+        self.paragraph = None
+        self.paragraphs = []
+        self.restricted = False
 
     def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == "article":
+            self.article_depth += 1
+        if self.article_depth and tag in ("p", "h2", "h3"):
+            self.paragraph = []
+        if "paywall" in (a.get("class") or "").lower() or a.get("itemprop") == "isAccessibleForFree" and a.get("content", "").lower() == "false":
+            self.restricted = True
         if tag != "meta":
             return
-        a = dict(attrs)
         key = a.get("property") or a.get("name")
         if key in ("og:description", "description", "twitter:description", "og:image"):
             self.values.setdefault(key, a.get("content", "")[:4000])
 
+    def handle_data(self, data):
+        if self.paragraph is not None:
+            self.paragraph.append(data)
+
+    def handle_endtag(self, tag):
+        if tag in ("p", "h2", "h3") and self.paragraph is not None:
+            value = " ".join("".join(self.paragraph).split())
+            if value:
+                self.paragraphs.append(value)
+            self.paragraph = None
+        if tag == "article":
+            self.article_depth = max(0, self.article_depth - 1)
+
 def parse_article_metadata(payload):
     parser = ArticleMetadata()
     parser.feed(payload.decode("utf-8", errors="replace"))
-    return {"body": news_text(parser.values.get("og:description") or parser.values.get("description") or parser.values.get("twitter:description")), "image": parser.values.get("og:image", "")}
+    description = news_text(parser.values.get("og:description") or parser.values.get("description") or parser.values.get("twitter:description"))
+    # Extract only visible article markup on the public broadcaster.
+    # Do not extract hidden JSON article bodies or subscription content.
+    return {"body": description, "article": "" if parser.restricted else "\n\n".join(parser.paragraphs)[:40000], "image": parser.values.get("og:image", "")}
 
 async def article_metadata(hass, url):
     # Only explicitly trusted public publisher hosts; never follow redirects.
@@ -216,4 +242,7 @@ async def article_metadata(hass, url):
                 chunks.extend(chunk)
                 if len(chunks) >= MAX_BYTES:
                     break
-    return await hass.async_add_executor_job(parse_article_metadata, bytes(chunks))
+    result = await hass.async_add_executor_job(parse_article_metadata, bytes(chunks))
+    if u.hostname not in ("www.dr.dk", "dr.dk"):
+        result.pop("article", None)
+    return result
