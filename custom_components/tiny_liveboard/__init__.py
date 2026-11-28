@@ -1,5 +1,5 @@
 from pathlib import Path
-from datetime import timedelta
+from datetime import date, timedelta
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.components.media_source import async_resolve_media
 import asyncio
@@ -9,6 +9,7 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.helpers.storage import Store
 import voluptuous as vol
 
+from .agenda import Agenda
 from .news import NewsEngine, settings, article_metadata
 from .alerts import AlertEngine
 from .radar import RadarEngine
@@ -87,7 +88,7 @@ def warnings_enabled(config):
 
 async def async_setup_entry(hass, entry):
     store = Store(hass, 1, DOMAIN)
-    hass.data[DOMAIN] = {"media": MediaEngine(hass), "news": NewsEngine(hass), "alerts": AlertEngine(hass), "radar": RadarEngine(hass), "store": store, "save_lock": asyncio.Lock(), "screens_live": {}, "config": {**entry.data, **(await store.async_load() or {})}}
+    hass.data[DOMAIN] = {"media": MediaEngine(hass), "news": NewsEngine(hass), "agenda": Agenda(hass), "archive": Store(hass, 1, DOMAIN + ".news_archive"), "archive_lock": asyncio.Lock(), "alerts": AlertEngine(hass), "radar": RadarEngine(hass), "store": store, "save_lock": asyncio.Lock(), "screens_live": {}, "config": {**entry.data, **(await store.async_load() or {})}}
     data = hass.data[DOMAIN]
     data["motion"] = MotionEngine(hass, data["media"])
     await data["motion"].configure(data["config"])
@@ -101,6 +102,7 @@ async def async_setup_entry(hass, entry):
         websocket_api.async_register_command(hass, get_news)
         websocket_api.async_register_command(hass, news_archive)
         websocket_api.async_register_command(hass, news_article)
+        websocket_api.async_register_command(hass, calendar_events)
         websocket_api.async_register_command(hass, get_dmi)
         websocket_api.async_register_command(hass, radar_frames)
         websocket_api.async_register_command(hass, radar_tile)
@@ -121,7 +123,7 @@ async def async_setup_entry(hass, entry):
     entry.async_on_unload(async_track_time_interval(hass, cleanup_media, timedelta(hours=1)))
     if warnings_enabled(hass.data[DOMAIN]["config"]):
         hass.data[DOMAIN]["alerts"].wis2.start()
-    frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard-panel", "module_url": "/tiny_liveboard/display.js?v=0.1.18", "embed_iframe": False, "trust_external": False}}, require_admin=False)
+    frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard-panel", "module_url": "/tiny_liveboard/display.js?v=0.1.19", "embed_iframe": False, "trust_external": False}}, require_admin=False)
     return True
 
 async def async_unload_entry(hass, entry):
@@ -162,6 +164,26 @@ async def save_config(hass, connection, msg):
             await data["alerts"].wis2.stop()
         connection.send_result(msg["id"], config)
 
+@websocket_api.websocket_command({
+    vol.Required("type"): "tiny_liveboard/calendar",
+    vol.Optional("profile", default=""): vol.All(str, vol.Length(max=64)),
+    vol.Required("start"): vol.Match(r"^\d{4}-\d{2}-\d{2}$"),
+    vol.Required("end"): vol.Match(r"^\d{4}-\d{2}-\d{2}$"),
+})
+@websocket_api.async_response
+async def calendar_events(hass, connection, msg):
+    data = hass.data[DOMAIN]
+    try:
+        result = await data["agenda"].get(
+            connection.user, profile_config(data["config"], msg["profile"]),
+            date.fromisoformat(msg["start"]), date.fromisoformat(msg["end"]),
+        )
+    except ValueError:
+        connection.send_error(msg["id"], "invalid_range", "Invalid calendar range")
+        return
+    connection.send_result(msg["id"], result)
+
+
 @websocket_api.websocket_command({vol.Required("type"): "tiny_liveboard/news_article", vol.Required("url"): str, vol.Optional("profile", default=""): str})
 @websocket_api.async_response
 async def news_article(hass, connection, msg):
@@ -186,8 +208,8 @@ async def news_archive(hass, connection, msg):
     import hashlib
     uid = connection.user.id
     data = hass.data[DOMAIN]
-    async with data["save_lock"]:
-        store = Store(hass, 1, DOMAIN + ".news_archive")
+    async with data["archive_lock"]:
+        store = data["archive"]
         archive = await store.async_load() or {}
         entries = archive.get(uid, [])
         url = msg["url"]
@@ -219,14 +241,26 @@ async def news_archive(hass, connection, msg):
                 saved_item["article_complete"] = bool(metadata.get("article"))
                 saved_item["image"] = metadata.get("image") or saved_item.get("image", "")
                 saved_item["original_url"] = metadata.get("url") or url
-                if saved_item.get("published") is None:
-                    saved_item["published"] = metadata.get("published")
+                if metadata.get("published") is not None:
+                    saved_item["published"] = metadata["published"]
                 saved_item["article_source"] = metadata.get("article_source", "rss")
                 entries.insert(0, {**saved_item, "id": key, "saved": time.time()})
         elif msg["action"] == "delete":
             entries = [x for x in entries if x["id"] != key]
         if msg["action"] != "list":
-            archive[uid] = entries
+            if entries:
+                archive[uid] = entries
+            else:
+                archive.pop(uid, None)
+            # Oldest saves are removed first when the shared budget is exceeded.
+            import json
+            total = sum(len(json.dumps(group, ensure_ascii=False).encode()) for group in archive.values())
+            while total > 32 * 1024 * 1024:
+                owner = min(archive, key=lambda user: archive[user][-1].get("saved", 0))
+                group = archive[owner]
+                total -= len(json.dumps(group.pop(), ensure_ascii=False).encode()) + 2
+                if not group:
+                    del archive[owner]
             await store.async_save(archive)
         connection.send_result(msg["id"], {"items": entries})
 

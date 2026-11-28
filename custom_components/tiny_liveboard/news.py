@@ -15,7 +15,6 @@ from urllib.parse import urljoin, urlsplit, quote_plus
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from defusedxml import ElementTree
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 _LOGGER = logging.getLogger(__name__)
 SOURCES = {
@@ -98,22 +97,22 @@ def parse_feed(payload):
     if root.tag == "rss" and root.find("channel") is None:
         raise ValueError("Missing RSS channel")
     items = []
-    for item in root.findall(".//item") + root.findall(".//entry"):
+    for item in (root.findall(".//item") + root.findall(".//entry"))[:100]:
         title = " ".join((item.findtext("title") or "").split())
         if not title:
             continue
         categories = [(c.get("term") or c.text or "").strip().casefold() for c in item.findall("category")]
-        published = timestamp(item.findtext("pubDate") or item.findtext("published") or item.findtext("updated"))
-        publisher = item.findtext("source") or ""
+        published = timestamp(item.findtext("pubDate") or item.findtext("published") or item.findtext("date"))
+        publisher = item.findtext("source/name") or item.findtext("source/title") or item.findtext("source") or ""
         body = news_text(item.findtext("encoded") or item.findtext("content") or item.findtext("description") or item.findtext("summary"))
         link = item.findtext("link") or next((n.get("href", "") for n in item.findall("link") if n.get("rel", "alternate") == "alternate"), "")
         try:
             u = urlsplit(link.strip())
-            link = link.strip()[:2048] if u.scheme in ("https", "http") and u.hostname and not u.username and not u.password else ""
+            link = link.strip() if len(link.strip()) <= 2048 and u.scheme in ("https", "http") and u.hostname and not u.username and not u.password else ""
         except ValueError:
             link = ""
         image = next((n.get("url", "") for n in item.iter() if n.tag in ("thumbnail", "enclosure", "content") and (n.tag == "thumbnail" or (n.get("type") or "").startswith("image/") or n.get("medium") == "image")), "")
-        if not image.startswith("https://"):
+        if not image.startswith("https://") or len(image) > 2048:
             image = ""
         items.append({"image": image, "url": link, "publisher": publisher[:100], "body": body, "title": title[:300], "breaking": bool(set(categories) & {"breaking news", "breaking"}), "published": published})
     return items[:50]
@@ -175,12 +174,19 @@ class NewsEngine:
                     self.urls[name] = url
             await asyncio.gather(*(self.fetch(name, selected[name]) for name in selected
                                    if now - self.updated.get(name, -TTL) >= (TTL if self.status.get(name, {}).get("ok", True) else FAILURE_TTL)))
+            for name in sorted(self.updated, key=self.updated.get):
+                if len(self.updated) <= max(96, len(selected)):
+                    break
+                if name not in selected:
+                    for cache in (self.items, self.updated, self.status, self.urls):
+                        cache.pop(name, None)
             return self.combined(selected)
 
     def combined(self, selected, now=None):
         now = time.time() if now is None else now
         result = []
         seen = set()
+        seen_urls = set()
         groups = [self.items.get(name, []) for name in selected]
         for i in range(50):
             for source, group in zip(selected, groups):
@@ -191,9 +197,12 @@ class NewsEngine:
                 if age > MAX_AGE or age < -300:
                     continue
                 key = re.sub(r"[^\w]+", " ", unicodedata.normalize("NFKC", item["title"]).casefold()).strip()
-                if key in seen:
+                url = item.get("url", "").partition("#")[0]
+                if key in seen or (url and url in seen_urls):
                     continue
                 seen.add(key)
+                if url:
+                    seen_urls.add(url)
                 result.append(dict(item, breaking=bool(self.status.get(source, {}).get("ok", True) and item["breaking"] and item["published"] is not None and 0 <= age <= BREAKING_TTL)))
         return sorted(result, key=lambda item: (not item["breaking"], -(item["published"] if item["published"] is not None else item["received"])))[:60]
 
