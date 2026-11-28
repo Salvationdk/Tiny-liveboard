@@ -1,7 +1,7 @@
 {
   "domain": "tiny_liveboard",
   "name": "Tiny LiveBoard",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "documentation": "https://github.com/Salvationdk/Tiny-liveboard",
   "issue_tracker": "https://github.com/Salvationdk/Tiny-liveboard/issues",
   "codeowners": [
