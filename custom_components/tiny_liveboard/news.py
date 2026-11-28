@@ -191,10 +191,17 @@ class ArticleMetadata(HTMLParser):
         self.paragraph = None
         self.paragraphs = []
         self.restricted = False
+        self.explicit_free = False
         self.skip_tags = []
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
+        if a.get("itemprop") == "isAccessibleForFree":
+            value = (a.get("content") or "").lower()
+            self.explicit_free |= value == "true"
+            self.restricted |= value == "false"
+        if re.search(r"paywall|subscriber.only|premium.content", " ".join((a.get("class") or "", a.get("id") or "")), re.I):
+            self.restricted = True
         if self.skip_tags:
             if tag not in ("area","base","br","col","embed","hr","img","input","link","meta","param","source","track","wbr"):
                 self.skip_tags.append(tag)
@@ -239,12 +246,18 @@ def parse_article_metadata(payload):
     description = news_text(parser.values.get("og:description") or parser.values.get("description") or parser.values.get("twitter:description"))
     # Extract only visible article markup on the public broadcaster.
     # Do not extract hidden JSON article bodies or subscription content.
-    return {"body": description, "article": "" if parser.restricted else "\n\n".join(parser.paragraphs)[:40000], "image": parser.values.get("og:image", "")}
+    return {"body": description, "article": "" if parser.restricted else "\n\n".join(parser.paragraphs)[:40000], "image": parser.values.get("og:image", ""), "explicit_free": parser.explicit_free}
+
+ARTICLE_DOMAINS = frozenset(("dr.dk","tv2.dk","tv2east.dk","tv2fyn.dk","tv2nord.dk","tv2ostjylland.dk","tvmidtvest.dk","tvsyd.dk","videnskab.dk","politi.dk","dst.dk","via.ritzau.dk","ekstrabladet.dk","bt.dk","politiken.dk","berlingske.dk","jyllands-posten.dk","information.dk","sn.dk","version2.dk","ing.dk","computerworld.dk","recordere.dk","beredskabsinfo.dk"))
+PUBLIC_ARTICLE_DOMAINS = frozenset(("dr.dk","politi.dk","dst.dk"))
 
 async def article_metadata(hass, url):
     # Only explicitly trusted public publisher hosts; never follow redirects.
     u = urlsplit(url)
-    if u.scheme != "https" or u.hostname not in ("www.dr.dk", "dr.dk", "nyheder.tv2.dk", "www.tv2.dk", "tv2.dk") or u.username or u.password or u.port not in (None, 443):
+    domain = (u.hostname or "").removeprefix("www.")
+    if domain == "nyheder.tv2.dk":
+        domain = "tv2.dk"
+    if u.scheme != "https" or domain not in ARTICLE_DOMAINS or u.username or u.password or u.port not in (None, 443):
         return {}
     session = async_get_clientsession(hass)
     async with asyncio.timeout(10):
@@ -257,6 +270,10 @@ async def article_metadata(hass, url):
                 if len(chunks) >= MAX_BYTES:
                     break
     result = await hass.async_add_executor_job(parse_article_metadata, bytes(chunks))
-    if u.hostname not in ("www.dr.dk", "dr.dk"):
+    if domain not in PUBLIC_ARTICLE_DOMAINS and not result.get("explicit_free"):
         result.pop("article", None)
+    image = urljoin(url, result.get("image") or "") if result.get("image") else ""
+    parsed = urlsplit(image)
+    result["image"] = image if parsed.scheme == "https" and parsed.hostname and not parsed.username and not parsed.password else ""
+    result.pop("explicit_free", None)
     return result
