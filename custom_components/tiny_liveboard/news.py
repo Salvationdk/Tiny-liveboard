@@ -182,3 +182,38 @@ class NewsEngine:
         except Exception as exc:
             self.status[name] = {"ok": False, "checked": time.time(), "error": str(exc)[:160] or type(exc).__name__, "last_success": self.status.get(name, {}).get("last_success"), "cached_count": len(self.items.get(name, []))}
             _LOGGER.debug("News source %s unavailable: %s", name, type(exc).__name__)
+
+class ArticleMetadata(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.values = {}
+
+    def handle_starttag(self, tag, attrs):
+        if tag != "meta":
+            return
+        a = dict(attrs)
+        key = a.get("property") or a.get("name")
+        if key in ("og:description", "description", "twitter:description", "og:image"):
+            self.values.setdefault(key, a.get("content", "")[:4000])
+
+def parse_article_metadata(payload):
+    parser = ArticleMetadata()
+    parser.feed(payload.decode("utf-8", errors="replace"))
+    return {"body": news_text(parser.values.get("og:description") or parser.values.get("description") or parser.values.get("twitter:description")), "image": parser.values.get("og:image", "")}
+
+async def article_metadata(hass, url):
+    # Only explicitly trusted public publisher hosts; never follow redirects.
+    u = urlsplit(url)
+    if u.scheme != "https" or u.hostname not in ("www.dr.dk", "dr.dk", "nyheder.tv2.dk", "www.tv2.dk", "tv2.dk") or u.username or u.password or u.port not in (None, 443):
+        return {}
+    session = async_get_clientsession(hass)
+    async with asyncio.timeout(10):
+        async with session.get(url, allow_redirects=False) as response:
+            if response.status != 200 or "text/html" not in response.headers.get("Content-Type", ""):
+                return {}
+            chunks = bytearray()
+            async for chunk in response.content.iter_chunked(16384):
+                chunks.extend(chunk)
+                if len(chunks) >= MAX_BYTES:
+                    break
+    return await hass.async_add_executor_job(parse_article_metadata, bytes(chunks))
