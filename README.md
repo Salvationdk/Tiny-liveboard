@@ -13,7 +13,7 @@ HACS-konfigurationen angiver Home Assistant 2025.6 som minimum. FFmpeg skal vær
 
 ### Lovelace
 
-Tilføj JavaScript-modulressourcen `/tiny_liveboard/display.js?v=0.1.24`. Opret derefter et manuelt kort.
+Tilføj JavaScript-modulressourcen `/tiny_liveboard/display.js?v=0.1.25`. Opret derefter et manuelt kort.
 
 ```yaml
 type: custom:tiny-liveboard-card
@@ -24,6 +24,8 @@ profile: Køkken
 Højde angives i pixels fra 240 til 2400. `profile` er valgfri. Brug én aktiv visning af samme kamera pr. skærm, når videoforbruget skal holdes nede.
 
 ## Studio og skærmprofiler
+
+Som administrator kan du åbne Studio direkte på `/tiny-liveboard?studio=1`. På standardpanelet vises Studio-knappen også, når kiosk er slået til.
 
 - **Layout** har flytning, størrelsesændring, lag, synlighed, fortryd og gentag. Hold Shift for et grovere gitter. Forhåndsvisningen bruger dashboardets renderer og viser de aktuelle entitetstilstande. Kamerafelter repræsenteres af navn og billedformat. Brug **Forhåndsvis** under kameraopsætningen til en rigtig kameratest.
 - **Design** indeholder temaer, farver og vejrikoner. Gem et tema i det centrale bibliotek og indlæs det i et andet layout eller en anden profil. Tryk **Gem** nederst for at gemme biblioteket på serveren.

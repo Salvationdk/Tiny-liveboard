@@ -240,7 +240,7 @@ async def async_setup_entry(hass, entry):
         if 1 <= quota <= 10000:
             await hass.async_add_executor_job(data["media"].enforce_quota, int(quota * 1024**3))
     entry.async_on_unload(async_track_time_interval(hass, cleanup_media, timedelta(hours=1)))
-    frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard-panel", "module_url": "/tiny_liveboard/display.js?v=0.1.24", "embed_iframe": False, "trust_external": False}}, require_admin=False)
+    frontend.async_register_built_in_panel(hass, "custom", sidebar_title="Tiny LiveBoard", sidebar_icon="mdi:monitor-dashboard", frontend_url_path="tiny-liveboard", config={"_panel_custom": {"name": "tiny-liveboard-panel", "module_url": "/tiny_liveboard/display.js?v=0.1.25", "embed_iframe": False, "trust_external": False}}, require_admin=False)
     if warnings_enabled(config):
         data["alerts"].wis2.start()
     return True

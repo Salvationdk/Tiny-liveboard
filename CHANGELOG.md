@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.25
+
+- Restored the administrator’s Studio button on the default kiosk dashboard. The toolbar stays within the viewport on narrow screens.
+- Added an administrator-only shortcut at `/tiny-liveboard?studio=1`.
+
 ## 0.1.24
 
 - Fixed installation on Home Assistant Core with Python 3.14 by allowing the Core-compatible aiomqtt 2.5 series and later compatible 2.x versions.

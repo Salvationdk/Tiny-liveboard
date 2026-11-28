@@ -64,3 +64,10 @@ Næste opgave: kør accepttesten i README på den faktiske vægskærm og med den
 - Lokalt på Python 3.14.10 og Core 2026.11.3 bestod konfigurationsdialog, opstart, sidepanelregistrering, HTTP-servering af frontendmodulet, en rigtig lokal kalender via WebSocket og genindlæsning. MQTT- og Atom-nedetid blev simuleret i den kørende Core-test. Separat bestod MQTT-forbindelse, WIS2-abonnement, levering og lukning med de faktiske aiomqtt/Paho-biblioteker mod en lokal MQTT-testbroker.
 - 37 Python-tests, 7 Node-tests, Python/JavaScript-syntaks, Ruff E9/F, afhængighedskontrol, JSON/YAML, cacheversion og frontend/backend-referencer bestod. `tests/test_wis2.py` dækker genforsøg og stop ved brokerfejl samt opstartsfejl ved TLS-initialisering.
 - Installation på brugerens HA-installation, Marketplace/HACS-opdatering og aktive eksterne WIS2-/MeteoAlarm-varsler afventer praktisk test.
+
+
+## 0.1.25 – adgang til Studio
+
+- Udgangspunkt `376f9e8` (0.1.24). Kiosk skjulte Studio-knappen på standardpanelet, selv for administratorer.
+- `frontend/display.js` bruger én regel til synlighed og viser Studio på standardpanelet uden for den beskårede 16:9-flade. Administratorer kan åbne Studio direkte på `/tiny-liveboard?studio=1`. Profilerede kioskskærme skjuler fortsat værktøjslinjen ved almindelig brug.
+- Chromium ved 375 × 740 px med simuleret HA-data verificerede Studio-åbning og gemning i kiosktilstand, en almindelig skærmprofil, direkte Studio-adresse og adgangsafvisning for en almindelig bruger. Afventer kontrol på brugerens faktiske Home Assistant.
